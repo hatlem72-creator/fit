@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
-<link rel="stylesheet" href="css/app.css?v=1">
+<link rel="stylesheet" href="css/app.css?v=2">
 </head>
 <body>
 <!-- Lock / first-run -->
@@ -57,6 +57,26 @@
     <div class="macro" data-m="carbs"><div class="mrow"><span>Carbs</span><span class="mval"></span></div><div class="bar"><i></i></div></div>
     <div class="macro" data-m="fat"><div class="mrow"><span>Fat</span><span class="mval"></span></div><div class="bar"><i></i></div></div>
   </div>
+  <div class="card quick-card" id="quickCard">
+    <div class="row between"><h3>⭐ My foods</h3><button class="btn small-btn" id="newFoodBtn" type="button">＋ New food</button></div>
+    <input id="quickSearch" type="search" placeholder="Search my foods…" aria-label="Search my foods">
+    <div id="quickList" class="qlist"></div>
+    <button class="btn ghost small-btn hidden" id="quickMore" type="button">Show all</button>
+    <div class="row between combo-head"><b>🍽️ Saved meals</b><button class="btn ghost small-btn" id="comboEdit" type="button">Edit</button></div>
+    <div id="comboList" class="chips wrapchips"></div>
+    <div class="copyrow">
+      <button class="btn small-btn" id="copyYest" type="button">📋 Copy yesterday</button>
+      <button class="btn small-btn" id="copyLastWk" type="button">📋 Same as last Mon</button>
+      <label class="btn small-btn">📋 Copy a day…<input type="date" id="copyDate" class="overlay-date"></label>
+    </div>
+  </div>
+  <div class="card habits" id="habitsCard">
+    <div class="row between"><h3>✅ Daily habits</h3><span class="streak" id="streak"></span></div>
+    <label class="habit" id="hSteps"><input type="checkbox" id="hStepsCb"><span class="hname">🚶 Walk <b id="hStepsGoal">8,000</b> steps</span><span class="hval" id="hStepsVal"></span></label>
+    <label class="habit" id="hRow"><input type="checkbox" id="hRowCb"><span class="hname">🚣 Row <b id="hRowGoal">15</b> min</span><span class="hval" id="hRowVal"></span></label>
+    <div class="row gap"><button class="btn grow" id="qRow" type="button">+ Rowing 15 min</button><button class="btn grow" id="qSteps" type="button">Enter steps</button></div>
+  </div>
+  <div class="card goalprog hidden" id="goalCard"></div>
   <div class="card water">
     <div class="row between"><h3>💧 Water</h3><span id="waterVal" class="muted">0 / 2000 ml</span></div>
     <div class="glasses" id="glasses"></div>
@@ -77,9 +97,12 @@
     <label class="field"><span>Steps</span><input id="aSteps" type="number" inputmode="numeric" min="0" placeholder="e.g. 9500"></label>
     <h3>Workouts</h3>
     <div id="workoutList"></div>
+    <div class="chips small quick" id="quickW">
+      <button type="button" data-q="Rowing|15">🚣 Rowing 15 min</button><button type="button" data-q="Rowing|30">🚣 Rowing 30</button><button type="button" data-q="Brisk walk|30">🚶 Brisk walk 30</button><button type="button" data-q="Strength|45">🏋️ Strength 45</button>
+    </div>
     <div class="workout-add">
       <select id="wType" aria-label="Workout type">
-        <option>Strength</option><option>Running</option><option>Walking</option><option>Cycling</option><option>Indoor cycling</option><option>Swimming</option><option>HIIT</option><option>Football</option><option>Hiking</option><option>Yoga</option><option>Cross trainer</option><option>Other</option>
+        <option>Rowing</option><option>Brisk walk</option><option>Strength</option><option>Running</option><option>Walking</option><option>Cycling</option><option>Indoor cycling</option><option>Swimming</option><option>HIIT</option><option>Football</option><option>Hiking</option><option>Yoga</option><option>Cross trainer</option><option>Other</option>
       </select>
       <input id="wMin" type="number" inputmode="numeric" placeholder="min" aria-label="Minutes">
       <input id="wKcal" type="number" inputmode="numeric" placeholder="kcal" aria-label="Workout kcal">
@@ -124,6 +147,10 @@
     <div class="chartbox"><canvas id="weekChart"></canvas></div>
   </div>
   <div class="card">
+    <div class="row between"><h3>✅ Habits this week</h3><span class="streak" id="wStreak"></span></div>
+    <div id="habitWeek"></div>
+  </div>
+  <div class="card">
     <h3>Average macros</h3>
     <div class="chartbox small"><canvas id="macroChart"></canvas></div>
   </div>
@@ -144,8 +171,10 @@
       <label class="field"><span>Age</span><input id="pAge" type="number" inputmode="numeric"></label>
       <label class="field"><span>Sex</span><select id="pSex"><option value="male">Male</option><option value="female">Female</option></select></label>
       <label class="field"><span>Training / week</span><input id="pSessions" type="number" min="0" max="14" inputmode="numeric"></label>
-      <label class="field"><span>Goal</span><select id="pGoal"><option value="lose">Lose weight</option><option value="maintain">Maintain</option><option value="gain">Gain weight</option></select></label>
-      <label class="field"><span>Target weight (kg)</span><input id="pTarget" type="number" step="0.1" inputmode="decimal"></label>
+      <label class="field"><span>Goal</span><select id="pGoal"><option value="recomp">Recomposition: lose fat, gain muscle</option><option value="lose">Lose weight</option><option value="maintain">Maintain</option><option value="gain">Gain weight</option></select></label>
+      <label class="field" id="fTargetW"><span>Target weight (kg)</span><input id="pTarget" type="number" step="0.1" inputmode="decimal"></label>
+      <label class="field recomp-only"><span>Starting weight (kg)</span><input id="pStart" type="number" step="0.1" inputmode="decimal"></label>
+      <label class="field recomp-only"><span>Lose (kg)</span><input id="pLoss" type="number" step="0.5" inputmode="decimal" placeholder="10"></label>
       <label class="field"><span>Rate (kg / week)</span><select id="pRate"><option>0.25</option><option selected>0.5</option><option>0.75</option><option>1</option></select></label>
     </div>
     <details class="help"><summary>Macro settings</summary>
@@ -154,10 +183,30 @@
         <label class="field"><span>Fat (% of kcal)</span><input id="pFat" type="number" inputmode="numeric" placeholder="27"></label>
       </div>
     </details>
-    <label class="check"><input type="checkbox" id="pAdaptive"> Use watch calories for the daily target <small class="muted">(target = burnt today ± goal, when entered)</small></label>
+    <label class="check" id="adaptiveRow"><input type="checkbox" id="pAdaptive"> Use watch calories for the daily target <small class="muted">(target = burnt today ± goal, when entered)</small></label>
+    <p class="tiny muted" id="adaptiveNote"></p>
     <label class="field"><span>Water goal (ml)</span><input id="pWater" type="number" step="250" inputmode="numeric" placeholder="2500"></label>
     <button class="btn primary big" id="pSave">Save profile</button>
     <p class="ok" id="pSaved"></p>
+  </div>
+  <div class="card" id="targetsCard">
+    <div class="row between"><h2>🎯 Targets</h2><button class="btn small-btn" id="planBtn" type="button">Use my plan</button></div>
+    <label class="check"><input type="checkbox" id="pManual"> <b>Manual targets</b> <small class="muted">(override the calculated ones)</small></label>
+    <div id="manualBox">
+      <label class="field big-field"><span>Daily calories (kcal)</span><input id="mKcal" type="number" inputmode="numeric" placeholder="1870"></label>
+      <div class="range-row"><span class="rl">Protein (g)</span><input id="mProtMin" type="number" inputmode="numeric" aria-label="Protein min" placeholder="min"><span>–</span><input id="mProtMax" type="number" inputmode="numeric" aria-label="Protein max" placeholder="max"></div>
+      <div class="range-row"><span class="rl">Carbs (g)</span><input id="mCarbMin" type="number" inputmode="numeric" aria-label="Carbs min" placeholder="min"><span>–</span><input id="mCarbMax" type="number" inputmode="numeric" aria-label="Carbs max" placeholder="max"></div>
+      <div class="range-row"><span class="rl">Fat (g)</span><input id="mFatMin" type="number" inputmode="numeric" aria-label="Fat min" placeholder="min"><span>–</span><input id="mFatMax" type="number" inputmode="numeric" aria-label="Fat max" placeholder="max"></div>
+      <label class="check small"><input type="checkbox" id="mFatAuto" checked> Fat = what's left of the calories (auto)</label>
+      <p class="tiny muted" id="manualSum"></p>
+    </div>
+    <h3>Daily habits</h3>
+    <div class="grid2">
+      <label class="field"><span>Walk at least (steps)</span><input id="pStepsGoal" type="number" step="500" inputmode="numeric" placeholder="8000"></label>
+      <label class="field"><span>Row at least (min)</span><input id="pRowGoal" type="number" inputmode="numeric" placeholder="15"></label>
+    </div>
+    <button class="btn primary big" id="tSave" type="button">Save targets</button>
+    <p class="ok" id="tSaved"></p>
   </div>
   <div class="card" id="calcCard"></div>
   <div class="card">
@@ -187,9 +236,10 @@
     <details class="help"><summary>Add to home screen</summary><p>Android/Chrome: menu ⋮ → <b>Add to Home screen / Install app</b>. iPhone/Safari: Share → <b>Add to Home Screen</b>. It works offline afterwards.</p></details>
     <details class="help"><summary>Scanning a nutrition label</summary><p>Tap <b>＋</b> → <b>Label photo</b>. Photograph the nutrition table straight on, filling the frame, with good light. The app reads it on your phone (English, Dutch, Norwegian), fills in the per-100 g values, and you can correct anything before saving. The first scan downloads the reading engine (~15 MB) once; after that it works offline.</p></details>
     <details class="help"><summary>How the target is calculated</summary><p>BMR uses the Mifflin-St Jeor formula. TDEE = BMR × an activity factor from your training sessions per week (0: 1.2, 1–2: 1.375, 3–4: 1.55, 5–6: 1.725, 7+: 1.9). Losing or gaining 1 kg ≈ 7700 kcal, so 0.5 kg/week = ±550 kcal/day. The target never goes below 1500 kcal (men) / 1200 kcal (women). Protein defaults to 2.0 g/kg when losing, 1.6 maintaining and 1.8 gaining; fat is 27% of calories; carbs fill the rest.</p></details>
+    <details class="help"><summary>Manual targets, ranges & habits</summary><p>With <b>Manual targets</b> on, your daily intake target is fixed (e.g. 1,870 kcal) and the protein / carb / fat goals are ranges. Fat can be auto-calculated from what's left of the calories (mid-point ± 5 g). On Today the green band on each macro bar is your range: the bar is <b style="color:#16a34a">green</b> inside it, <b style="color:#d97706">amber</b> below and <b style="color:#dc2626">red</b> above. Watch calories still show as burnt / balance but don't change the target. Habits tick themselves when steps reach the goal or a <b>Rowing</b> workout of enough minutes is logged; you can also tick them by hand. The streak counts days with both habits done.</p></details>
     <details class="help"><summary>Burnt calories</summary><p>If you enter <b>total</b> calories from the watch, that's used. If you only enter <b>active</b> calories, burnt = BMR + active. With nothing entered, the estimated TDEE is shown (marked “est.”).</p></details>
   </div>
-  <p class="tiny muted center">Fit Log v1 · data stays on your device</p>
+  <p class="tiny muted center">Fit Log v2 · data stays on your device</p>
 </section>
 </main>
 
@@ -243,7 +293,7 @@
     </div>
     <form id="productForm" class="mode hidden" autocomplete="off">
       <div class="prod-head"><img id="fThumb" class="thumb hidden" alt=""><div class="grow">
-        <label class="field"><span>Name</span><input id="fName" required placeholder="e.g. Greek yoghurt"></label>
+        <label class="field"><span>Short name</span><input id="fName" required placeholder="e.g. Bread, Skyr, Chicken breast"></label>
         <label class="field"><span>Brand <small>optional</small></span><input id="fBrand"></label>
       </div></div>
       <div class="row between"><b id="basisLbl">Per 100 g</b><label class="check small"><input type="checkbox" id="fWhole"> values are for the whole portion</label></div>
@@ -259,8 +309,13 @@
         <label class="field"><span>kJ</span><input id="fKj" type="number" step="any" inputmode="decimal"></label>
       </div>
       <p class="warn tiny" id="fCheck"></p>
-      <label class="field big-field" id="gramsField"><span>Amount eaten (g)</span><input id="fGrams" type="number" step="any" inputmode="decimal" value="100"></label>
-      <div class="chips small" id="gramChips"></div>
+      <div class="portions" id="portionEditor">
+        <div class="row between"><b>Portions</b><button type="button" class="btn small-btn" id="addPortion">＋ Add portion</button></div>
+        <div id="portionRows"></div>
+        <p class="tiny muted">e.g. <i>slice = 35 g</i>, <i>tub = 150 g</i>, <i>egg = 60 g</i>. Weigh one once and enter the grams.</p>
+      </div>
+      <div class="amount" id="fAmount"></div>
+      <input type="hidden" id="fGrams" value="100">
       <div class="portion-preview" id="fPreview"></div>
       <div class="row gap wrap">
         <label class="check"><input type="checkbox" id="fSaveLib" checked> Save to my foods</label>
@@ -268,17 +323,29 @@
       </div>
       <input type="hidden" id="fBarcode">
       <button class="btn primary big" type="submit" id="fSubmit">Add to breakfast</button>
+      <button class="btn big" type="button" id="fSaveOnly">Save to My foods only</button>
       <button class="btn danger hidden" type="button" id="fDelete">Remove from log</button>
     </form>
   </div>
 </div>
 
-<div id="toast" class="toast hidden"></div>
+<div id="qsheet" class="qsheet hidden" role="dialog" aria-modal="true" aria-label="Log food">
+  <div class="qpanel">
+    <div class="qhead"><div id="qThumb"></div><div class="grow"><div class="qname" id="qName"></div><div class="tiny muted" id="qSub"></div></div><button class="iconbtn" id="qClose" aria-label="Close">✕</button></div>
+    <div class="chips" id="qMeals"><button data-meal="breakfast">Breakfast</button><button data-meal="lunch">Lunch</button><button data-meal="dinner">Dinner</button><button data-meal="snacks">Snacks</button></div>
+    <div class="amount" id="qAmount"></div>
+    <div class="portion-preview" id="qPreview"></div>
+    <button class="btn primary big" id="qLog">Log</button>
+    <button class="btn ghost" id="qEdit">✏️ Edit food</button>
+  </div>
+</div>
 
-<script src="js/calc.js?v=1"></script>
-<script src="js/labelparse.js?v=1"></script>
-<script src="js/importers.js?v=1"></script>
+<div id="toast" class="toast hidden"><span id="toastMsg"></span><button id="toastUndo" class="hidden">Undo</button></div>
+
+<script src="js/calc.js?v=2"></script>
+<script src="js/labelparse.js?v=2"></script>
+<script src="js/importers.js?v=2"></script>
 <script src="vendor/chart.umd.min.js" defer></script>
-<script src="js/app.js?v=1" defer></script>
+<script src="js/app.js?v=2" defer></script>
 </body>
 </html>
