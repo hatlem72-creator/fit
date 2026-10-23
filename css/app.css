@@ -175,3 +175,10 @@ details.help{margin:8px 0;font-size:.9rem}details.help summary{cursor:pointer;fo
 .qpanel .copyrow .btn{flex:1 1 30%;font-size:.88rem;min-height:48px;position:relative}
 .danger-t{color:var(--bad)!important}
 @media (max-width:380px){.hweek{grid-template-columns:88px repeat(7,1fr) 36px;gap:3px}.hero{gap:10px}.big-num{font-size:1.75rem}}
+/* v4: visible errors, Save above the keyboard, toast at the top */
+.ferr{color:var(--bad);font-size:.85rem;font-weight:600;margin:4px 0 0;min-height:0}.ferr:empty{display:none}
+#productForm input.bad{border:2px solid var(--bad)!important;background:color-mix(in srgb,var(--bad) 8%,var(--bg))}
+.savebar{position:sticky;bottom:0;z-index:2;background:var(--bg);padding:8px 0 calc(6px + env(safe-area-inset-bottom));margin:6px -2px 0}
+.savebar .btn.big{margin-top:0}
+.toast{top:calc(10px + env(safe-area-inset-top));bottom:auto}
+.tile.flash{animation:flash 1.4s ease}@keyframes flash{0%,40%{box-shadow:0 0 0 4px var(--brand2)}100%{box-shadow:none}}
