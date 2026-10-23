@@ -83,7 +83,7 @@ details.help{margin:8px 0;font-size:.9rem}details.help summary{cursor:pointer;fo
 .train-dots span i.on{background:color-mix(in srgb,var(--accent) 80%,transparent);color:#fff}
 .workout-add{display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:6px;margin:6px 0}.workout-add input,.workout-add select{padding:8px}
 .hist{display:grid;grid-template-columns:1.2fr 1fr 1fr 1fr;gap:4px;font-size:.85rem;padding:6px 0;border-top:1px solid var(--line)}.hist.h{font-weight:700;color:var(--muted);border:0}
-.toast{position:fixed;left:50%;bottom:calc(100px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:999px;z-index:40;font-weight:600;max-width:90vw;text-align:center}
+.toast{position:fixed;left:50%;bottom:calc(100px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:999px;z-index:40;font-weight:600;max-width:92vw;text-align:center;white-space:nowrap}
 .lock{position:fixed;inset:0;z-index:50;background:linear-gradient(160deg,#0f766e,#134e4a);display:flex;align-items:center;justify-content:center;padding:20px}
 .lock-card{background:var(--card);border-radius:24px;padding:28px 22px;width:100%;max-width:360px;text-align:center}
 .logo-mark{font-size:2.6rem}.pin{text-align:center;font-size:1.8rem;letter-spacing:.4em;margin:8px 0;min-height:60px}
@@ -128,3 +128,50 @@ details.help{margin:8px 0;font-size:.9rem}details.help summary{cursor:pointer;fo
 .qpanel .chips{padding:6px 0}.qpanel .btn.ghost{width:100%}
 .toast{display:flex;gap:12px;align-items:center}.toast button{background:none;border:0;color:#5eead4;font-weight:800;font-size:.95rem;cursor:pointer}
 .meal .add.ghosty{background:none;padding:6px 8px}
+/* v3: simple Food list */
+.foodhead h2{margin:0;font-size:1.3rem}
+.plusbtn{width:52px;height:52px;border-radius:50%;border:0;background:var(--brand);color:#fff;font-size:1.9rem;font-weight:700;line-height:1;cursor:pointer;box-shadow:0 4px 12px rgba(15,118,110,.35);touch-action:manipulation}
+.iconbtn.sm{width:44px;height:44px;font-size:1.3rem;box-shadow:none;background:var(--bg)}
+.eat{padding:14px 12px}
+.tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:10px}
+@media (min-width:560px){.tiles{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.tile{position:relative;display:flex;flex-direction:column;gap:4px;min-height:112px;padding:10px;border-radius:16px;border:2px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;text-align:left;cursor:pointer;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:manipulation;-webkit-tap-highlight-color:transparent;transition:transform .08s}
+.tile:active{transform:scale(.97)}
+.tile.on{border-color:var(--brand2);background:color-mix(in srgb,var(--brand2) 10%,var(--bg))}
+.ttop{display:flex;justify-content:space-between;align-items:flex-start;min-height:48px}
+.tth{position:relative}.tth .thumb{width:48px;height:48px}
+.badge{position:absolute;top:-8px;right:-14px;background:var(--brand);color:#fff;border-radius:999px;padding:2px 8px;font-size:.85rem;font-weight:800;border:2px solid var(--card);white-space:nowrap}
+.minus{width:40px;height:40px;border-radius:50%;border:2px solid var(--line);background:var(--card);color:var(--ink);font-size:1.5rem;font-weight:700;line-height:1;cursor:pointer;touch-action:manipulation;flex:none}
+.tname{font-weight:700;font-size:1rem;line-height:1.2;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}
+.tsub{font-size:.82rem;color:var(--muted)}.tsub b{color:var(--ink)}
+.tile.add{align-items:center;justify-content:center;border-style:dashed;color:var(--brand);text-align:center}
+.tile.add .plus{font-size:2rem;font-weight:700;line-height:1}
+.hint{margin:10px 0 0}
+#quickSearch{margin:10px 0 0}
+.mealhd{display:flex;justify-content:space-between;font-size:.8rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:12px 0 0}
+#eatenCard .entry:first-of-type{margin-top:4px}#eatenCard .kc{white-space:nowrap}
+/* food form */
+.nutri{display:grid;grid-template-columns:1fr;gap:10px;align-items:start}
+.nutri.has-photo{grid-template-columns:minmax(0,38%) minmax(0,1fr)}
+.nutri.zoom{grid-template-columns:1fr}
+.fphoto{width:100%;max-height:340px;object-fit:contain;border-radius:12px;background:#000;cursor:zoom-in;position:sticky;top:0}
+.nutri.zoom .fphoto{max-height:none;cursor:zoom-out}
+.nfields{display:grid;gap:8px;min-width:0}
+.nf{display:grid;grid-template-columns:76px minmax(0,1fr) 34px;align-items:center;gap:6px}
+.nutri.has-photo .nf{grid-template-columns:minmax(0,1fr) 30px}.nutri.has-photo .nf>span{grid-column:1/-1;margin-bottom:-4px}
+.nf>span{font-weight:600;font-size:.95rem}.nf input{font-size:1.35rem;font-weight:700;min-height:54px;padding:8px 10px}.nf i{font-style:normal;color:var(--muted);font-size:.85rem}
+.nf:last-child>span,.nf:last-child input{font-weight:500}.nf:last-child input{font-size:1.1rem;min-height:46px}
+.nf input.fixed{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--bg))}.nf input.missing{border-color:var(--bad)}
+#fFor{margin:8px 0 0}
+.scanrow{display:flex;gap:8px;justify-content:center;margin:14px 0 4px}
+.bcbox{margin:6px 0}.bcbox .row{margin:8px 0}
+.scanstatus{min-height:1em;margin:6px 0}
+#ocrBox{margin:8px 0}
+/* sheets */
+.mealpick{padding:8px 0 2px;flex-wrap:wrap}
+.qpanel h2{margin:0}.qpanel h3{margin:14px 0 6px}
+.mlist .mrowc{display:flex;gap:6px;align-items:center;margin:0 0 6px}.mlist .btn{justify-content:flex-start;text-align:left}.mlist small{font-weight:500;margin-left:6px}
+.mlist .x{border:0;background:none;color:var(--muted);font-size:1.1rem;min-width:40px;min-height:40px;cursor:pointer}
+.qpanel .copyrow .btn{flex:1 1 30%;font-size:.88rem;min-height:48px;position:relative}
+.danger-t{color:var(--bad)!important}
+@media (max-width:380px){.hweek{grid-template-columns:88px repeat(7,1fr) 36px;gap:3px}.hero{gap:10px}.big-num{font-size:1.75rem}}

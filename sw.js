@@ -1,6 +1,6 @@
 /* Fit Log service worker: app shell offline, big OCR files cached on first use. */
-const VERSION = 'fitlog-v2';
-const SHELL = ['./', 'index.html', 'css/app.css?v=2', 'js/calc.js?v=2', 'js/labelparse.js?v=2', 'js/importers.js?v=2', 'js/app.js?v=2',
+const VERSION = 'fitlog-v3';
+const SHELL = ['./', 'index.html', 'css/app.css?v=3', 'js/calc.js?v=3', 'js/labelparse.js?v=3', 'js/importers.js?v=3', 'js/app.js?v=3',
   'vendor/chart.umd.min.js', 'vendor/zxing.min.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-180.png'];
 const BIG = 'fitlog-vendor-v1';
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });

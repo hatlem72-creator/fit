@@ -45,10 +45,11 @@ async function loadAll() {
   await migrate();
 }
 /* schema migration: v1 -> v2 only adds fields, never removes or rewrites existing data */
-const SCHEMA = 3;
+const SCHEMA = 4;
 async function migrate() {
   const p = S.profile;
   if ((p.schema || 1) >= SCHEMA) return;
+  const was = p.schema || 1;
   // v3: foods get named portions + usage counts; saved meals list
   let fch = false;
   const counts = {};
@@ -64,6 +65,11 @@ async function migrate() {
   if (p.manual == null) p.manual = false;
   if (p.mFatAuto == null) p.mFatAuto = true;
   if (p.goal === 'recomp' && !p.startWeight) p.startWeight = firstWeight() || p.weight;
+  // v4: "My plan" is the default when manual targets were never set; every food gets a default amount (grams)
+  if (was < 4 && !p.manual && p.mKcal == null) applyPlan(p);
+  let dch = false;
+  for (const f of S.foods) if (!(+f.defG > 0)) { const ps = (f.portions || []).find(x => +x.g > 0); f.defG = ps ? +ps.g : (+f.lastGrams || +f.servingG || 100); dch = true; }
+  if (dch) await DB.set('foods', S.foods);
   p.schema = SCHEMA;
   for (const [d, D] of Object.entries(S.days)) {
     let ch = false;
@@ -75,6 +81,7 @@ async function migrate() {
   }
   await DB.set('profile', p);
 }
+function applyPlan(p) { const P = Calc.PLAN; Object.assign(p, { manual: true, mKcal: P.mKcal, mProtMin: P.mProtMin, mProtMax: P.mProtMax, mCarbMin: P.mCarbMin, mCarbMax: P.mCarbMax, mFatAuto: true, planDefault: true }); }
 function firstWeight() { const w = [...S.weights].sort((a, b) => a.date < b.date ? -1 : 1); return w.length ? w[0].kg : null; }
 function day(d = curDay) { return S.days[d] || (S.days[d] = { entries: [], water: 0, activity: {}, workouts: [], habits: {} }); }
 const saveDay = (d = curDay) => DB.set('day:' + d, day(d));
@@ -239,18 +246,8 @@ function renderToday() {
   // activity mini
   const a = day().activity || {};
   $('#actMini').innerHTML = `<div><b>${a.active ? fmt(a.active) : '–'}</b><span class="tiny muted">active kcal</span></div><div><b>${a.steps ? fmt(a.steps) : '–'}</b><span class="tiny muted">steps</span></div><div><b>${workoutCount(curDay)}</b><span class="tiny muted">workouts</span></div>`;
-  // meals
-  const entries = day().entries;
-  $('#meals').innerHTML = Object.entries(MEALS).map(([k, label]) => {
-    const list = entries.filter(e => e.meal === k), kc = list.reduce((s, e) => s + (+e.kcal || 0), 0);
-    return `<div class="card meal"><h3><span>${label} <small class="muted">${list.length ? fmt(kc) + ' kcal' : ''}</small></span><span>${list.length ? `<button class="add ghosty" data-savemeal="${k}" aria-label="Save ${label.toLowerCase()} as a meal">💾</button> ` : ''}<button class="add" data-add="${k}">＋ Add</button></span></h3>
-      ${list.map(e => `<div class="entry" data-entry="${e.id}">${thumbHtml(e.thumb || prodThumb(e.productId))}<div class="info"><div class="nm">${esc(e.name)}</div><div class="sub">${amountTxt(e)} · P ${r1(e.protein)} · C ${r1(e.carbs)} · F ${r1(e.fat)}</div></div><div class="kc">${fmt(e.kcal)}</div></div>`).join('')}</div>`;
-  }).join('');
-  $$('#meals [data-add]').forEach(b => b.onclick = () => openSheet(b.dataset.add));
-  $$('#meals [data-savemeal]').forEach(b => b.onclick = () => saveCombo(b.dataset.savemeal));
-  renderQuick();
-  $$('#meals [data-entry]').forEach(el => el.onclick = () => editEntry(el.dataset.entry));
-  $('#profileHint').innerHTML = tg.bmr ? '' : 'Set up your profile under <b>Me</b> to get a daily target.';
+  renderFood(); renderEaten();
+  $('#profileHint').innerHTML = tg.bmr ? '' : 'Add your weight, height and age under <b>Me</b> for burnt-calorie estimates.';
 }
 function renderHabits() {
   const h = habitState(curDay), D = day();
@@ -525,73 +522,160 @@ $('#wipeBtn').onclick = async () => {
   await DB.clear(); await loadAll(); S.settings.pinAsked = true; await saveKey('settings'); toast('All data deleted'); setView('today');
 };
 
-/* ---------- ADD FOOD SHEET ---------- */
-let sheetMeal = 'breakfast', sheetMode = 'label', editingId = null, currentThumb = null;
-const FF = { kcal: '#fKcal', protein: '#fProtein', carbs: '#fCarbs', fat: '#fFat', sugar: '#fSugar', satfat: '#fSatfat', fibre: '#fFibre', salt: '#fSalt', kj: '#fKj' };
-function guessMeal() { const h = new Date().getHours(); return h < 10 ? 'breakfast' : h < 15 ? 'lunch' : h < 21 ? 'dinner' : 'snacks'; }
-function openSheet(meal, mode) {
-  sheetMeal = meal || guessMeal(); editingId = null; editingProduct = null;
-  $('#sheet').classList.remove('hidden'); document.body.style.overflow = 'hidden';
-  $('#sheetTitle').textContent = 'Add food'; $('#mealChips').classList.remove('hidden'); $('#modeSeg').classList.remove('hidden');
-  $('#productForm').reset(); $('#productForm').dataset.pid = ''; currentThumb = null; $('#fThumb').classList.add('hidden');
-  $('#bcInput').value = ''; $('#bcStatus').textContent = 'Looks the product up in the free Open Food Facts database.'; $('#libSearch').value = '';
-  setMeal(sheetMeal); setMode(mode || (S.foods.length ? 'library' : 'label'));
+/* ---------- FOOD: one list, tap to add ---------- */
+const NF = { kcal: '#fKcal', protein: '#fProtein', fat: '#fFat', carbs: '#fCarbs' };
+const defG = f => +f.defG > 0 ? +f.defG : 100;
+const valsFor = (f, g) => Calc.portion(f.per100 || {}, g);
+function autoMeal() { const d = new Date(), h = d.getHours() + d.getMinutes() / 60; return h < 10.5 ? 'breakfast' : h < 14.5 ? 'lunch' : h < 17 ? 'snacks' : h < 21.5 ? 'dinner' : 'snacks'; }
+const nice = v => { const x = r1(v); return Number.isInteger(x) ? fmt(x) : x.toLocaleString('en-GB'); };
+const gTxt = g => nice(g) + ' g';
+function entryFrom(f, grams, meal, n) {
+  const pt = valsFor(f, grams);
+  return { id: uid(), meal, name: f.name, grams: r1(grams), n: n || undefined,
+    kcal: r0(pt.kcal), protein: r1(pt.protein), carbs: r1(pt.carbs), fat: r1(pt.fat), sugar: r1(pt.sugar), salt: r1(pt.salt), fibre: r1(pt.fibre),
+    productId: f.id, per100: f.per100, time: Date.now() };
 }
-function closeSheet() { $('#sheet').classList.add('hidden'); document.body.style.overflow = ''; stopScan(); render(); }
-$('#sheetClose').onclick = closeSheet;
-$('#addFab').onclick = () => openSheet();
-function setMeal(m) { sheetMeal = m; $$('#mealChips button').forEach(b => b.classList.toggle('on', b.dataset.meal === m)); $('#fSubmit').textContent = editingProduct ? 'Save food' : editingId ? 'Save changes' : 'Add to ' + MEALS[m].toLowerCase(); }
-$$('#mealChips button').forEach(b => b.onclick = () => setMeal(b.dataset.meal));
-function setMode(m) {
-  sheetMode = m; stopScan();
-  $$('#modeSeg button').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
-  ['label', 'barcode', 'library'].forEach(x => $('#mode-' + x).classList.toggle('hidden', x !== m));
-  $('#productForm').classList.toggle('hidden', m !== 'manual');
-  if (m === 'manual') fillForm({});
-  if (m === 'library') renderLib();
-  if (m === 'label') { $('#ocrBox').classList.add('hidden'); }
+function rescale(e, f, grams) { const x = entryFrom(f, grams, e.meal); for (const k of ['grams', 'kcal', 'protein', 'carbs', 'fat', 'sugar', 'salt', 'fibre']) e[k] = x[k]; e.time = Date.now(); }
+function countFor(id, D = day()) { return D.entries.filter(e => e.productId === id).reduce((s, e) => s + (e.n || 1), 0); }
+function sortedFoods(q) {
+  q = (q || '').trim().toLowerCase();
+  return S.foods.filter(f => !q || (f.name + ' ' + (f.brand || '')).toLowerCase().includes(q))
+    .sort((a, b) => ((b.uses || 0) - (a.uses || 0)) || ((b.lastUsed || 0) - (a.lastUsed || 0)) || a.name.localeCompare(b.name));
 }
-$$('#modeSeg button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
+let tilesAll = false;
+function renderFood() {
+  const q = $('#quickSearch').value, list = sortedFoods(q), many = S.foods.length > 8;
+  $('#quickSearch').classList.toggle('hidden', !many);
+  const shown = tilesAll || q ? list : list.slice(0, 12);
+  $('#tiles').innerHTML = shown.map(f => {
+    const n = countFor(f.id), g = defG(f), pt = valsFor(f, g);
+    return `<div class="tile ${n ? 'on' : ''}" data-t="${f.id}" role="button" tabindex="0" aria-label="Add ${esc(f.name)}, ${gTxt(g)}, ${fmt(pt.kcal)} kcal">
+      <div class="ttop"><span class="tth">${thumbHtml(f.thumb)}${n ? `<b class="badge">×${nice(n)}</b>` : ''}</span>${n ? `<button type="button" class="minus" data-minus="${f.id}" aria-label="Remove one ${esc(f.name)}">−</button>` : ''}</div>
+      <div class="tname">${esc(f.name)}</div><div class="tsub">${gTxt(g)} · <b>${fmt(pt.kcal)}</b> kcal</div></div>`;
+  }).join('') + (q && !shown.length ? '<p class="tiny muted">No match.</p>' : '')
+    + `<button type="button" class="tile add" id="tileNew"><span class="plus">＋</span><span class="tname">${S.foods.length ? 'New food' : 'Add your first food'}</span></button>`;
+  $('#tilesMore').classList.toggle('hidden', !!q || list.length <= 12);
+  $('#tilesMore').textContent = tilesAll ? 'Show fewer' : `Show all ${list.length}`;
+  $('#tileHint').classList.toggle('hidden', !S.foods.length);
+  $$('#tiles [data-t]').forEach(el => bindTile(el, el.dataset.t));
+  $$('#tiles [data-minus]').forEach(b => b.onclick = ev => { ev.stopPropagation(); removeOne(b.dataset.minus); });
+  $('#tileNew').onclick = () => openFood();
+}
+function bindTile(el, id) {
+  let t = null, long = false, sx = 0, sy = 0;
+  const cancel = () => clearTimeout(t);
+  el.addEventListener('pointerdown', e => { if (e.target.closest('.minus')) return; long = false; sx = e.clientX; sy = e.clientY; cancel(); t = setTimeout(() => { long = true; navigator.vibrate && navigator.vibrate(25); openAmount(id); }, 550); });
+  el.addEventListener('pointerup', cancel); el.addEventListener('pointerleave', cancel); el.addEventListener('pointercancel', cancel);
+  el.addEventListener('pointermove', e => { if (Math.abs(e.clientX - sx) > 12 || Math.abs(e.clientY - sy) > 12) cancel(); });
+  el.addEventListener('contextmenu', e => { e.preventDefault(); cancel(); if (!long) { long = true; openAmount(id); } });
+  el.addEventListener('click', e => { if (e.target.closest('.minus')) return; if (long) { long = false; return; } tapAdd(id); });
+  el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tapAdd(id); } });
+}
+function snapshot() { const D = day(); return { entries: JSON.parse(JSON.stringify(D.entries)), uses: Object.fromEntries(S.foods.map(f => [f.id, f.uses || 0])) }; }
+async function restore(s) { day().entries = s.entries; for (const f of S.foods) if (s.uses[f.id] != null) f.uses = s.uses[f.id]; await saveDay(); await saveKey('foods'); render(); }
+async function tapAdd(id) {
+  const f = S.foods.find(x => x.id === id); if (!f) return;
+  const snap = snapshot(), D = day(), g = defG(f), meal = autoMeal();
+  // merge with today's earlier taps of the same food in the same meal (unchanged default amount)
+  let e = D.entries.find(x => x.productId === f.id && x.meal === meal && x.n && Math.abs(x.grams - x.n * g) < 0.05);
+  if (e) { e.n += 1; rescale(e, f, e.n * g); } else D.entries.push(entryFrom(f, g, meal, 1));
+  Object.assign(f, { uses: (f.uses || 0) + 1, lastUsed: Date.now() });
+  await saveDay(); await saveKey('foods');
+  navigator.vibrate && navigator.vibrate(12);
+  render();
+  const pt = valsFor(f, g);
+  toast(`${f.name} ×${nice(countFor(f.id))} · +${fmt(pt.kcal)} kcal`, 2200, () => restore(snap));
+}
+async function removeOne(id) {
+  const f = S.foods.find(x => x.id === id), D = day();
+  const list = D.entries.filter(x => x.productId === id).sort((a, b) => (b.time || 0) - (a.time || 0));
+  if (!list.length) return;
+  const snap = snapshot(), e = list[0];
+  if (e.n > 1 && f) { e.n -= 1; rescale(e, f, e.n * defG(f)); } else D.entries = D.entries.filter(x => x !== e);
+  if (f) f.uses = Math.max(0, (f.uses || 0) - 1);
+  await saveDay(); await saveKey('foods'); render();
+  toast(`Removed one ${f ? f.name : e.name}`, 2200, () => restore(snap));
+}
+$('#quickSearch').oninput = renderFood;
+$('#tilesMore').onclick = () => { tilesAll = !tilesAll; renderFood(); };
+$('#newFoodBtn').onclick = () => openFood();
+$('#addFab').onclick = () => openFood();
 
-let formPortions = [], fAmt = null, editingProduct = null;
-function fillForm(p, grams, unit, qty) {
-  $('#productForm').classList.remove('hidden');
-  $('#fName').value = p.name || ''; $('#fBrand').value = p.brand || ''; $('#fBarcode').value = p.barcode || '';
-  const per = p.per100 || {};
-  for (const [k, id] of Object.entries(FF)) { $(id).value = per[k] ?? ''; $(id).classList.remove('fixed', 'missing'); }
-  $('#fWhole').checked = false; $('#basisLbl').textContent = p.basis === '100ml' ? 'Per 100 ml' : 'Per 100 g';
-  $('#fFav').checked = !!p.fav; $('#fSaveLib').checked = true;
-  currentThumb = p.thumb || null; $('#fThumb').classList.toggle('hidden', !currentThumb); if (currentThumb) $('#fThumb').src = currentThumb;
-  $('#productForm').dataset.pid = p.id || '';
-  $('#fDelete').classList.toggle('hidden', !editingId && !editingProduct);
-  $('#fDelete').textContent = editingProduct ? 'Delete this food' : 'Remove from log';
-  formPortions = (p.portions && p.portions.length ? p.portions : (p.servingG ? [{ name: 'serving', g: p.servingG }] : [])).map(x => ({ ...x }));
-  renderPortionRows();
-  const init = initAmount(p, grams, unit, qty);
-  fAmt = amountUI($('#fAmount'), () => formPortions, init, g => { $('#fGrams').value = g; updatePreview(); });
-  $('#fAmount').classList.toggle('hidden', !!editingProduct); $('#fPreview').classList.toggle('hidden', !!editingProduct);
-  $('#fSaveOnly').classList.toggle('hidden', !!editingId || !!editingProduct);
-  updatePreview(); setMeal(sheetMeal);
+/* eaten list */
+function entryAmount(e) {
+  if (e.n > 1 && e.grams) return `${e.n} × ${gTxt(e.grams / e.n)}`;
+  if (e.unit && e.unit !== 'g' && e.qty) return `${nice(e.qty)} ${esc(plural(e.qty, e.unit))} · ${gTxt(e.grams)}`;
+  return e.grams ? gTxt(e.grams) : '1 portion';
 }
-function initAmount(p, grams, unit, qty) {
-  const ps = (p.portions || []);
-  if (unit && unit !== 'g' && ps.some(x => x.name === unit)) return { unit, qty: qty || 1 };
-  if (grams) return { unit: 'g', qty: grams };
-  if (p.lastUnit && p.lastUnit !== 'g' && ps.some(x => x.name === p.lastUnit)) return { unit: p.lastUnit, qty: p.lastQty || 1 };
-  if (ps.length && +ps[0].g > 0 && (!p.lastUnit || !p.lastGrams)) return { unit: ps[0].name, qty: p.lastGrams ? Math.max(0.5, Math.round(p.lastGrams / ps[0].g * 2) / 2) : 1 };
-  if (p.lastGrams) return { unit: 'g', qty: p.lastGrams };
-  if (ps.length) return { unit: ps[0].name, qty: 1 };
-  return { unit: 'g', qty: p.servingG || 100 };
+const plural = (n, u) => +n === 1 || /s$/i.test(u) ? u : u + 's';
+function renderEaten() {
+  const entries = day().entries, tot = entries.reduce((s, e) => s + (+e.kcal || 0), 0);
+  const title = curDay === today() ? 'Eaten today' : 'Eaten ' + dayLabel(curDay).toLowerCase();
+  if (!entries.length) { $('#eatenCard').innerHTML = `<h3>${title}</h3><p class="tiny muted">Nothing yet. Tap a food above.</p>`; return; }
+  $('#eatenCard').innerHTML = `<div class="row between"><h3>${title}</h3><b>${fmt(tot)} kcal</b></div>` + Object.entries(MEALS).map(([k, label]) => {
+    const list = entries.filter(e => e.meal === k); if (!list.length) return '';
+    return `<div class="mealhd"><span>${label}</span><span>${fmt(list.reduce((s, e) => s + (+e.kcal || 0), 0))} kcal</span></div>`
+      + list.map(e => `<div class="entry" data-entry="${e.id}" role="button" tabindex="0">${thumbHtml(e.thumb || prodThumb(e.productId))}<div class="info"><div class="nm">${esc(e.name)}</div><div class="sub">${entryAmount(e)} · P ${nice(e.protein)} · F ${nice(e.fat)} · C ${nice(e.carbs)}</div></div><div class="kc">${fmt(e.kcal)}</div></div>`).join('');
+  }).join('');
+  $$('#eatenCard [data-entry]').forEach(el => el.onclick = () => openEntry(el.dataset.entry));
 }
-function renderPortionRows() {
-  $('#portionRows').innerHTML = formPortions.map((x, i) => `<div class="prow"><input data-pn="${i}" value="${esc(x.name)}" placeholder="slice" aria-label="Portion name"><input data-pg="${i}" type="number" step="any" inputmode="decimal" value="${x.g ?? ''}" placeholder="35" aria-label="Grams per portion"><span>g</span><button type="button" class="x" data-pdel="${i}" aria-label="Remove portion">✕</button></div>`).join('');
-  $$('#portionRows [data-pn]').forEach(el => el.oninput = () => { formPortions[+el.dataset.pn].name = el.value.trim(); });
-  $$('#portionRows [data-pg]').forEach(el => el.oninput = () => { formPortions[+el.dataset.pg].g = +el.value || 0; });
-  $$('#portionRows input').forEach(el => el.onchange = () => fAmt && fAmt.rebuild());
-  $$('#portionRows [data-pdel]').forEach(b => b.onclick = () => { formPortions.splice(+b.dataset.pdel, 1); renderPortionRows(); fAmt && fAmt.rebuild(); });
+
+/* amount sheet: hold a tile (other grams) or tap a logged entry (change grams / meal / remove) */
+let qProduct = null, qEntry = null, qMeal = 'breakfast', qAmt = null;
+function openAmount(id) { const f = S.foods.find(x => x.id === id); if (f) showQ(f, null); }
+function openEntry(id) {
+  const e = day().entries.find(x => x.id === id); if (!e) return;
+  const f = S.foods.find(x => x.id === e.productId) || (e.per100 && e.grams ? { name: e.name, per100: e.per100 } : null);
+  showQ(f, e);
 }
-$('#addPortion').onclick = () => { formPortions.push({ name: '', g: '' }); renderPortionRows(); const ins = $$('#portionRows [data-pn]'); ins[ins.length - 1].focus(); };
-/* amount picker: grams or a named portion, with big −/+ buttons */
+function showQ(f, e) {
+  qProduct = f; qEntry = e; qMeal = e ? e.meal : autoMeal();
+  const name = f ? f.name : e.name;
+  $('#qThumb').innerHTML = thumbHtml((f && f.thumb) || (e && (e.thumb || prodThumb(e.productId)))); $('#qName').textContent = name;
+  $('#qSub').textContent = f && f.id ? `Default ${gTxt(defG(f))} · ${fmt(valsFor(f, defG(f)).kcal)} kcal` : e ? `${fmt(e.kcal)} kcal` : '';
+  const canAmt = !!(f && f.per100);
+  $('#qAmount').classList.toggle('hidden', !canAmt); $('#qPreview').classList.toggle('hidden', !canAmt);
+  if (canAmt) {
+    const g0 = e ? +e.grams : defG(f);
+    qAmt = amountUI($('#qAmount'), () => [], { unit: 'g', qty: r1(g0) }, g => {
+      const pt = valsFor(f, g);
+      $('#qPreview').innerHTML = `<div><b>${fmt(pt.kcal)}</b><span>kcal</span></div><div><b>${nice(pt.protein)}</b><span>protein g</span></div><div><b>${nice(pt.fat)}</b><span>fat g</span></div><div><b>${nice(pt.carbs)}</b><span>carbs g</span></div>`;
+    });
+  } else qAmt = null;
+  setQMeal(qMeal);
+  $('#qLog').textContent = e ? 'Save' : 'Add';
+  $('#qDel').classList.toggle('hidden', !e); $('#qEdit').classList.toggle('hidden', !(f && f.id));
+  $('#qsheet').classList.remove('hidden'); document.body.style.overflow = 'hidden';
+}
+function setQMeal(m) { qMeal = m; $$('#qMeals button').forEach(b => b.classList.toggle('on', b.dataset.meal === m)); }
+$$('#qMeals button').forEach(b => b.onclick = () => setQMeal(b.dataset.meal));
+function closeQuick() { $('#qsheet').classList.add('hidden'); document.body.style.overflow = ''; }
+$('#qClose').onclick = closeQuick;
+$('#qsheet').onclick = e => { if (e.target.id === 'qsheet') closeQuick(); };
+$('#qEdit').onclick = () => { const id = qProduct.id; closeQuick(); openFood(id); };
+$('#qLog').onclick = async () => {
+  const f = qProduct, g = qAmt ? qAmt.grams() : null;
+  if (qAmt && !(g > 0)) { toast('Set the grams'); return; }
+  const snap = snapshot();
+  if (qEntry) {
+    const e = day().entries.find(x => x.id === qEntry.id); if (!e) return closeQuick();
+    e.meal = qMeal;
+    if (qAmt && Math.abs(g - e.grams) > 0.05) { rescale(e, f, g); e.n = e.n && f.id && Math.abs(g - e.n * defG(f)) < 0.05 ? e.n : undefined; delete e.unit; delete e.qty; }
+    await saveDay(); closeQuick(); render(); toast(`Saved ${e.name}`, 2200, () => restore(snap));
+    return;
+  }
+  const n = Math.abs(g - defG(f)) < 0.05 ? 1 : undefined;
+  const e = entryFrom(f, g, qMeal, n); day().entries.push(e);
+  Object.assign(f, { uses: (f.uses || 0) + 1, lastUsed: Date.now() });
+  await saveDay(); await saveKey('foods'); closeQuick(); render();
+  toast(`${f.name} ${gTxt(g)} · +${fmt(e.kcal)} kcal`, 2200, () => restore(snap));
+};
+$('#qDel').onclick = async () => {
+  const snap = snapshot(), e = qEntry; day().entries = day().entries.filter(x => x.id !== e.id);
+  const f = S.foods.find(x => x.id === e.productId); if (f) f.uses = Math.max(0, (f.uses || 0) - (e.n || 1));
+  await saveDay(); await saveKey('foods'); closeQuick(); render(); toast(`Removed ${e.name}`, 2200, () => restore(snap));
+};
+/* grams stepper with big −/+ (also supports named portions for older data) */
 function amountUI(root, getPortions, init, onChange) {
   const st = { unit: init.unit || 'g', qty: +init.qty || 100 };
   const valid = () => getPortions().filter(p => p.name && +p.g > 0);
@@ -605,220 +689,128 @@ function amountUI(root, getPortions, init, onChange) {
   function rebuild() {
     const ps = valid();
     if (st.unit !== 'g' && !ps.some(p => p.name === st.unit)) { st.unit = 'g'; st.qty = 100; }
-    root.innerHTML = `<span class="lbl">Amount</span><div class="stepper"><button type="button" class="mn" aria-label="Less">−</button><input type="number" step="any" inputmode="decimal" class="q" aria-label="Amount"><button type="button" class="pl" aria-label="More">＋</button></div>
-      <div class="chips small">${['g', ...ps.map(p => p.name)].map(u => `<button type="button" data-u="${esc(u)}" class="${u === st.unit ? 'on' : ''}">${u === 'g' ? 'grams' : esc(u) + ' · ' + r1(ps.find(p => p.name === u).g) + ' g'}</button>`).join('')}</div><div class="eq"></div>`;
-    const step = dir => { const g = st.unit === 'g'; let v = +st.qty || 0;
-      if (g) { const s = v < 50 ? 5 : v < 200 ? 10 : 25; v = Math.max(0, Math.round((v + dir * s) / s) * s); }
+    root.innerHTML = `<span class="lbl">${st.unit === 'g' ? 'Grams' : 'Amount'}</span><div class="stepper"><button type="button" class="mn" aria-label="Less">−</button><input type="number" step="any" inputmode="decimal" class="q" aria-label="Grams"><button type="button" class="pl" aria-label="More">＋</button></div>
+      ${ps.length ? `<div class="chips small">${['g', ...ps.map(p => p.name)].map(u => `<button type="button" data-u="${esc(u)}" class="${u === st.unit ? 'on' : ''}">${u === 'g' ? 'grams' : esc(u)}</button>`).join('')}</div>` : ''}<div class="eq"></div>`;
+    const step = dir => { let v = +st.qty || 0;
+      if (st.unit === 'g') { const s = v < 50 ? 5 : v < 200 ? 10 : 25; v = Math.max(0, Math.round((v + dir * s) / s) * s); }
       else v = dir > 0 ? (v < 1 ? v + 0.5 : Math.floor(v) + 1) : (v <= 1 ? Math.max(0.5, v - 0.5) : Math.ceil(v) - 1);
       st.qty = Math.round(v * 10) / 10; update(); };
     root.querySelector('.mn').onclick = () => step(-1); root.querySelector('.pl').onclick = () => step(1);
     root.querySelector('.q').oninput = e => { st.qty = +e.target.value || 0; update(); };
-    root.querySelectorAll('[data-u]').forEach(b => b.onclick = () => {
-      const g = grams(), u = b.dataset.u; st.unit = u;
-      const p = pg(); st.qty = u === 'g' ? Math.round(g) : Math.max(0.5, Math.round(g / p * 2) / 2); rebuild();
-    });
+    root.querySelectorAll('[data-u]').forEach(b => b.onclick = () => { const g = grams(), u = b.dataset.u; st.unit = u; const p = pg(); st.qty = u === 'g' ? Math.round(g) : Math.max(0.5, Math.round(g / p * 2) / 2); rebuild(); });
     update();
   }
   rebuild();
   return { grams, st, rebuild };
 }
-const plural = (n, u) => +n === 1 || /s$/i.test(u) ? u : u + 's';
-function amountTxt(e) { return e.unit && e.unit !== 'g' && e.qty ? `${r1(e.qty)} ${esc(plural(e.qty, e.unit))} · ${r0(e.grams)} g` : (e.grams ? `${r0(e.grams)} g` : '1 portion'); }
-function formPer() { const o = {}; for (const [k, id] of Object.entries(FF)) { const v = $(id).value; if (v !== '') o[k] = +v; } if (o.kcal == null && o.kj) o.kcal = r0(o.kj / 4.184); return o; }
-function formPortion() {
-  const per = formPer(), g = +$('#fGrams').value || 0;
-  if ($('#fWhole').checked) return { ...per };
-  return Calc.portion(per, g);
-}
-function updatePreview() {
-  const pt = formPortion(), per = formPer();
-  $('#fPreview').innerHTML = `<div><b>${fmt(pt.kcal)}</b><span>kcal</span></div><div><b>${r1(pt.protein)}</b><span>protein g</span></div><div><b>${r1(pt.carbs)}</b><span>carbs g</span></div><div><b>${r1(pt.fat)}</b><span>fat g</span></div>`;
-  $('#basisLbl').textContent = $('#fWhole').checked ? 'Whole portion' : ($('#basisLbl').textContent.includes('ml') ? 'Per 100 ml' : 'Per 100 g');
-  let warn = '';
-  if (per.kcal && per.protein != null && per.carbs != null && per.fat != null) {
-    const est = per.protein * 4 + per.carbs * 4 + per.fat * 9 + (per.fibre || 0) * 2;
-    if (Math.abs(est - per.kcal) > Math.max(25, per.kcal * .2)) warn = `⚠️ Check the numbers: the macros add up to ≈${r0(est)} kcal, not ${r0(per.kcal)}.`;
+
+/* NEW FOOD form: values are for the amount entered (the default portion) */
+let editingProduct = null, currentThumb = null, scanPer100 = null, scanExtra = {};
+function openFood(id) {
+  const f = id && S.foods.find(x => x.id === id);
+  editingProduct = f ? f.id : null; scanPer100 = null; scanExtra = {};
+  $('#productForm').reset();
+  for (const s of ['#fName', '#fAmountG', ...Object.values(NF)]) $(s).classList.remove('fixed', 'missing');
+  $('#sheetTitle').textContent = f ? 'Edit food' : 'New food';
+  $('#ocrBox').classList.add('hidden'); $('#bcBox').classList.add('hidden'); stopScan(); $('#ocrText').textContent = ''; $('#scanStatus').textContent = ''; $('#bcInput').value = '';
+  $('#fDelete').classList.toggle('hidden', !f); $('#fBarcode').value = f ? f.barcode || '' : '';
+  currentThumb = f ? f.thumb || null : null; setPhoto(currentThumb);
+  if (f) {
+    const g = defG(f), v = valsFor(f, g);
+    $('#fName').value = f.name; $('#fAmountG').value = nice(g).replace(/,/g, '');
+    for (const [k, s] of Object.entries(NF)) $(s).value = v[k] != null ? r1(v[k]) : '';
   }
-  if (!$('#fWhole').checked && per.kcal > 900) warn = '⚠️ More than 900 kcal per 100 g is unusual – check the kcal value.';
-  $('#fCheck').textContent = warn;
+  updateCheck();
+  $('#sheet').classList.remove('hidden'); document.body.style.overflow = 'hidden'; $('.sheet-body').scrollTop = 0;
+  if (!f) setTimeout(() => $('#fName').focus({ preventScroll: true }), 60);
 }
-$('#productForm').addEventListener('input', e => { e.target.classList && e.target.classList.remove('fixed', 'missing'); updatePreview(); });
-function saveProductFromForm() {
-  const name = $('#fName').value.trim(), per = formPer();
-  if (!name || per.kcal == null) { toast('Name and kcal are needed'); return null; }
-  const whole = $('#fWhole').checked, grams = +$('#fGrams').value || (whole ? 0 : 100);
-  let per100 = per;
-  if (whole && grams) per100 = Object.fromEntries(Object.entries(per).map(([k, v]) => [k, r1(v * 100 / grams)]));
-  const portions = formPortions.filter(x => x.name && +x.g > 0).map(x => ({ name: x.name, g: +x.g }));
-  return { name, per100, whole, grams, portions };
+function setPhoto(src) { const im = $('#fPhoto'); im.classList.toggle('hidden', !src); $('#nutri').classList.toggle('has-photo', !!src); if (src) im.src = src; }
+$('#fPhoto').onclick = () => $('#nutri').classList.toggle('zoom');
+function closeSheet() { $('#sheet').classList.add('hidden'); document.body.style.overflow = ''; stopScan(); render(); }
+$('#sheetClose').onclick = closeSheet;
+function formVals() { const o = {}; for (const [k, s] of Object.entries(NF)) { const v = $(s).value; if (v !== '') o[k] = +v; } return o; }
+// fill the 4 fields from per-100 g values (scan / barcode) for the current amount
+function fillFromPer100(per, opts = {}) {
+  scanPer100 = per;
+  if (!(+$('#fAmountG').value > 0)) $('#fAmountG').value = opts.amount || 100;
+  applyScan(opts.mark);
 }
-async function upsertProduct(f, pid, opts = {}) {
-  let p = pid && S.foods.find(x => x.id === pid);
-  if (!p) { p = { id: uid(), created: Date.now(), uses: 0 }; S.foods.push(p); }
-  Object.assign(p, { name: f.name, brand: $('#fBrand').value.trim(), barcode: $('#fBarcode').value || p.barcode, per100: f.per100, portions: f.portions, thumb: currentThumb || p.thumb, fav: $('#fFav').checked });
-  if (opts.used) Object.assign(p, { lastGrams: f.grams, lastUnit: opts.unit, lastQty: opts.qty, lastMeal: opts.meal, lastUsed: Date.now(), uses: (p.uses || 0) + 1 });
-  await saveKey('foods');
-  return p;
+function applyScan(mark) {
+  if (!scanPer100) return;
+  const g = +$('#fAmountG').value || 100, v = Calc.portion(scanPer100, g);
+  for (const [k, s] of Object.entries(NF)) { $(s).value = v[k] != null ? r1(v[k]) : ''; $(s).classList.remove('fixed', 'missing'); if (mark) { if (scanPer100[k] == null && k !== 'carbs') $(s).classList.add('missing'); if ((mark.fixed || []).includes(k)) $(s).classList.add('fixed'); } }
+  updateCheck();
 }
-$('#productForm').onsubmit = async e => {
-  e.preventDefault();
-  const f = saveProductFromForm(); if (!f) return;
-  let pid = $('#productForm').dataset.pid || null;
-  if (editingProduct) { const p = await upsertProduct(f, editingProduct); toast(`Saved ${p.name}`); closeSheet(); return; }
-  const unit = fAmt ? fAmt.st.unit : 'g', qty = fAmt ? fAmt.st.qty : f.grams;
-  if ($('#fSaveLib').checked && (!f.whole || f.grams)) pid = (await upsertProduct(f, pid, { used: !editingId, unit, qty, meal: sheetMeal })).id;
-  else if (pid) { const p = S.foods.find(x => x.id === pid); if (p) { p.fav = $('#fFav').checked; await saveKey('foods'); } }
-  const pt = $('#fWhole').checked ? formPer() : Calc.portion(f.per100, f.grams);
-  const entry = { id: editingId || uid(), meal: sheetMeal, name: f.name + ($('#fBrand').value.trim() ? ' · ' + $('#fBrand').value.trim() : ''), grams: f.grams || null,
-    unit: f.whole ? undefined : unit, qty: f.whole ? undefined : qty,
-    kcal: r0(pt.kcal), protein: r1(pt.protein), carbs: r1(pt.carbs), fat: r1(pt.fat), sugar: r1(pt.sugar), salt: r1(pt.salt), fibre: r1(pt.fibre),
-    productId: pid, per100: f.per100, time: Date.now() };
-  if (!pid && currentThumb) entry.thumb = currentThumb;
-  const D = day();
-  if (editingId) { const i = D.entries.findIndex(x => x.id === editingId); D.entries[i] = { ...D.entries[i], ...entry }; }
-  else D.entries.push(entry);
-  await saveDay();
-  toast(`${editingId ? 'Updated' : 'Added'} ${entry.kcal} kcal to ${MEALS[sheetMeal].toLowerCase()}`);
-  closeSheet();
+$('#fAmountG').addEventListener('input', () => { if (scanPer100) applyScan(); else updateCheck(); });
+for (const s of Object.values(NF)) $(s).addEventListener('input', () => { scanPer100 = null; $(s).classList.remove('fixed', 'missing'); updateCheck(); });
+function updateCheck() {
+  const v = formVals(), g = +$('#fAmountG').value || 0;
+  let w = '';
+  if (v.kcal && v.protein != null && v.fat != null) {
+    const est = v.protein * 4 + (v.carbs || 0) * 4 + v.fat * 9;
+    if (v.carbs != null && Math.abs(est - v.kcal) > Math.max(25, v.kcal * .25)) w = `⚠️ Check: protein, fat and carbs add up to about ${fmt(est)} kcal, not ${fmt(v.kcal)}.`;
+    else if (est > v.kcal * 1.25 + 10) w = `⚠️ Check: protein and fat alone are about ${fmt(est)} kcal.`;
+  }
+  if (g && v.kcal && v.kcal / g > 9.2) w = '⚠️ Check: that is more than 900 kcal per 100 g.';
+  $('#fCheck').textContent = w;
+}
+$('#productForm').onsubmit = async ev => {
+  ev.preventDefault();
+  const name = $('#fName').value.trim(), g = +$('#fAmountG').value, v = formVals();
+  if (!name) { toast('Add a name'); $('#fName').focus(); return; }
+  if (!(g > 0)) { toast('Add the amount in grams'); $('#fAmountG').focus(); return; }
+  if (v.kcal == null) { toast('Add the calories'); $('#fKcal').focus(); return; }
+  const per100 = {};
+  for (const k of Object.keys(NF)) if (v[k] != null) per100[k] = Math.round(v[k] * 100 / g * 100) / 100;
+  for (const [k, x] of Object.entries(scanExtra)) if (x != null) per100[k] = x;
+  let p = editingProduct && S.foods.find(x => x.id === editingProduct); const isNew = !p;
+  if (!p) { p = { id: uid(), created: Date.now(), uses: 0, portions: [] }; S.foods.push(p); }
+  Object.assign(p, { name, defG: r1(g), per100: { ...(isNew ? {} : pickExtras(p.per100)), ...per100 }, barcode: $('#fBarcode').value || p.barcode, thumb: currentThumb || p.thumb });
+  if (!isNew) p.portions = (p.portions || []).filter(x => x.name); // older named portions kept for old entries
+  await saveKey('foods'); closeSheet();
+  toast(isNew ? `Saved ${name}. Tap it to add.` : `Saved ${name}`);
 };
-$('#fSaveOnly').onclick = async () => {
-  const f = saveProductFromForm(); if (!f) return;
-  const p = await upsertProduct(f, $('#productForm').dataset.pid || null);
-  toast(`Saved “${p.name}” to My foods`); closeSheet();
-};
-function editProduct(id) {
-  const f = S.foods.find(x => x.id === id); if (!f) return;
-  openSheet(); editingProduct = id;
-  $('#sheetTitle').textContent = 'Edit food'; $('#modeSeg').classList.add('hidden'); $('#mealChips').classList.add('hidden');
-  ['label', 'barcode', 'library'].forEach(x => $('#mode-' + x).classList.add('hidden'));
-  fillForm(f); $('#fSubmit').textContent = 'Save food';
-}
-function editEntry(id) {
-  const e = day().entries.find(x => x.id === id); if (!e) return;
-  openSheet(e.meal); editingId = id;
-  $('#sheetTitle').textContent = 'Edit entry'; $('#modeSeg').classList.add('hidden');
-  ['label', 'barcode', 'library'].forEach(x => $('#mode-' + x).classList.add('hidden'));
-  const p = S.foods.find(f => f.id === e.productId) || {};
-  const per100 = e.per100 || p.per100 || (e.grams ? Object.fromEntries(['kcal', 'protein', 'carbs', 'fat', 'sugar', 'salt', 'fibre'].map(k => [k, r1((e[k] || 0) * 100 / e.grams)])) : {});
-  fillForm({ ...p, name: p.name || e.name, per100, thumb: p.thumb || e.thumb, id: e.productId }, e.unit && e.unit !== 'g' ? null : e.grams, e.unit, e.qty);
-  if (!e.grams) { $('#fWhole').checked = true; for (const k of ['kcal', 'protein', 'carbs', 'fat']) $(FF[k]).value = e[k]; updatePreview(); }
-  setMeal(e.meal);
-}
+const pickExtras = per => Object.fromEntries(Object.entries(per || {}).filter(([k]) => !(k in NF)));
 $('#fDelete').onclick = async () => {
-  if (editingProduct) { if (!confirm('Delete this food from My foods? Logged entries stay.')) return; S.foods = S.foods.filter(f => f.id !== editingProduct); await saveKey('foods'); toast('Food deleted'); closeSheet(); return; }
-  const D = day(); D.entries = D.entries.filter(x => x.id !== editingId); await saveDay(); toast('Removed'); closeSheet(); };
-$('#fWhole').onchange = updatePreview;
-
-// library
-function renderLib() {
-  const q = $('#libSearch').value.trim().toLowerCase();
-  const list = S.foods.filter(f => !q || (f.name + ' ' + (f.brand || '')).toLowerCase().includes(q))
-    .sort((a, b) => (b.fav - a.fav) || ((b.uses || 0) - (a.uses || 0)) || ((b.lastUsed || 0) - (a.lastUsed || 0)));
-  $('#libList').innerHTML = list.length ? list.map(f => `<div class="libitem" data-pid="${f.id}">${thumbHtml(f.thumb)}<div class="info"><div class="nm">${f.fav ? '⭐ ' : ''}${esc(f.name)}</div><div class="sub">${esc(f.brand || '')} ${fmt(f.per100 && f.per100.kcal)} kcal/100 g · P ${r1(f.per100 && f.per100.protein)} C ${r1(f.per100 && f.per100.carbs)} F ${r1(f.per100 && f.per100.fat)}</div></div><button class="x" data-libdel="${f.id}" aria-label="Delete from my foods">🗑</button></div>`).join('')
-    : `<p class="muted">${q ? 'No match.' : 'No saved foods yet. Scan a label or add one manually and it will appear here.'}</p>`;
-  $$('#libList [data-pid]').forEach(el => el.onclick = ev => {
-    if (ev.target.dataset.libdel) return;
-    const f = S.foods.find(x => x.id === el.dataset.pid); $('#mode-library').classList.add('hidden'); fillForm(f);
-  });
-  $$('[data-libdel]').forEach(b => b.onclick = async ev => { ev.stopPropagation(); if (!confirm('Delete this food from your list?')) return; S.foods = S.foods.filter(f => f.id !== b.dataset.libdel); await saveKey('foods'); renderLib(); });
-}
-$('#libSearch').oninput = renderLib;
-
-/* ---------- My foods quick log ---------- */
-let quickAll = false, comboEditing = false, qProduct = null, qMeal = 'breakfast', qAmt = null;
-const portionKcal = (f, g) => Calc.portion(f.per100 || {}, g);
-function sortedFoods(q) {
-  q = (q || '').trim().toLowerCase();
-  return S.foods.filter(f => !q || (f.name + ' ' + (f.brand || '')).toLowerCase().includes(q))
-    .sort((a, b) => ((b.uses || 0) - (a.uses || 0)) || (b.fav - a.fav) || ((b.lastUsed || 0) - (a.lastUsed || 0)) || a.name.localeCompare(b.name));
-}
-function renderQuick() {
-  const q = $('#quickSearch').value, list = sortedFoods(q), shown = quickAll || q ? list : list.slice(0, 8);
-  const logged = {}; for (const e of day().entries) if (e.productId) logged[e.productId] = (logged[e.productId] || 0) + 1;
-  $('#quickList').innerHTML = shown.length ? shown.map(f => {
-    const init = initAmount(f), ps = f.portions || [], pp = ps.find(x => x.name === init.unit);
-    const g = pp ? init.qty * pp.g : init.qty, pt = portionKcal(f, g);
-    const amt = pp ? `${r1(init.qty)} ${esc(plural(init.qty, pp.name))}` : `${r0(g)} g`;
-    return `<div class="qi ${logged[f.id] ? 'logged' : ''}" data-q="${f.id}">${thumbHtml(f.thumb)}<div class="info"><div class="nm">${esc(f.name)}</div><div class="sub">${amt} · ${fmt(pt.kcal)} kcal · ${r1(pt.protein)} g protein${f.uses ? ` · used ${f.uses}×` : ''}</div></div><button class="ed" data-qed="${f.id}" aria-label="Edit ${esc(f.name)}">✏️</button><span class="tick">${logged[f.id] ? (logged[f.id] > 1 ? logged[f.id] : '✓') : ''}</span></div>`;
-  }).join('') : `<p class="tiny muted">${q ? 'No match.' : 'Create your regular foods once (scan, barcode or manual) and they show up here, most used first.'}</p>`;
-  $('#quickMore').classList.toggle('hidden', !!q || list.length <= 8);
-  $('#quickMore').textContent = quickAll ? 'Show fewer' : `Show all ${list.length}`;
-  $$('#quickList [data-q]').forEach(el => el.onclick = ev => { if (ev.target.closest('[data-qed]')) return; openQuick(el.dataset.q); });
-  $$('#quickList [data-qed]').forEach(b => b.onclick = () => editProduct(b.dataset.qed));
-  // saved meals
-  $('#comboList').innerHTML = S.combos.length ? S.combos.map(c => `<button type="button" data-combo="${c.id}">🍽️ ${esc(c.name)} · ${fmt(c.items.reduce((s, e) => s + (+e.kcal || 0), 0))} kcal${comboEditing ? '<span class="x">✕</span>' : ''}</button>`).join('')
-    : '<span class="tiny muted">Tap 💾 on a meal below to save it as a combo (e.g. “Standard breakfast”).</span>';
-  $('#comboEdit').classList.toggle('hidden', !S.combos.length); $('#comboEdit').textContent = comboEditing ? 'Done' : 'Edit';
-  $$('#comboList [data-combo]').forEach(b => b.onclick = () => comboEditing ? deleteCombo(b.dataset.combo) : logCombo(b.dataset.combo));
-  const wd = parseYmd(curDay).toLocaleDateString('en-GB', { weekday: 'short' });
-  $('#copyLastWk').textContent = `📋 Same as last ${wd}`;
-  $('#copyYest').textContent = curDay === today() ? '📋 Copy yesterday' : '📋 Copy day before';
-}
-$('#quickSearch').oninput = renderQuick;
-$('#quickMore').onclick = () => { quickAll = !quickAll; renderQuick(); };
-$('#newFoodBtn').onclick = () => openSheet(undefined, 'label');
-$('#comboEdit').onclick = () => { comboEditing = !comboEditing; renderQuick(); };
-function openQuick(id) {
-  const f = S.foods.find(x => x.id === id); if (!f) return;
-  qProduct = f; qMeal = guessMeal();
-  $('#qThumb').innerHTML = thumbHtml(f.thumb); $('#qName').textContent = f.name;
-  const p = f.per100 || {};
-  $('#qSub').textContent = `${fmt(p.kcal)} kcal · P ${r1(p.protein)} · C ${r1(p.carbs)} · F ${r1(p.fat)} per 100 g`;
-  setQMeal(qMeal);
-  qAmt = amountUI($('#qAmount'), () => f.portions || [], initAmount(f), g => {
-    const pt = portionKcal(f, g);
-    $('#qPreview').innerHTML = `<div><b>${fmt(pt.kcal)}</b><span>kcal</span></div><div><b>${r1(pt.protein)}</b><span>protein g</span></div><div><b>${r1(pt.carbs)}</b><span>carbs g</span></div><div><b>${r1(pt.fat)}</b><span>fat g</span></div>`;
-  });
-  $('#qsheet').classList.remove('hidden'); document.body.style.overflow = 'hidden';
-}
-function setQMeal(m) { qMeal = m; $$('#qMeals button').forEach(b => b.classList.toggle('on', b.dataset.meal === m)); $('#qLog').textContent = 'Log to ' + MEALS[m].toLowerCase(); }
-$$('#qMeals button').forEach(b => b.onclick = () => setQMeal(b.dataset.meal));
-function closeQuick() { $('#qsheet').classList.add('hidden'); document.body.style.overflow = ''; }
-$('#qClose').onclick = closeQuick;
-$('#qsheet').onclick = e => { if (e.target.id === 'qsheet') closeQuick(); };
-$('#qEdit').onclick = () => { const id = qProduct.id; closeQuick(); editProduct(id); };
-function entryFrom(f, grams, unit, qty, meal) {
-  const pt = portionKcal(f, grams);
-  return { id: uid(), meal, name: f.name + (f.brand ? ' · ' + f.brand : ''), grams, unit, qty,
-    kcal: r0(pt.kcal), protein: r1(pt.protein), carbs: r1(pt.carbs), fat: r1(pt.fat), sugar: r1(pt.sugar), salt: r1(pt.salt), fibre: r1(pt.fibre),
-    productId: f.id, per100: f.per100, time: Date.now() };
-}
-$('#qLog').onclick = async () => {
-  const f = qProduct, g = qAmt.grams(); if (!g) { toast('Set an amount'); return; }
-  const e = entryFrom(f, g, qAmt.st.unit, qAmt.st.qty, qMeal);
-  day().entries.push(e); await saveDay();
-  Object.assign(f, { uses: (f.uses || 0) + 1, lastUsed: Date.now(), lastGrams: g, lastUnit: qAmt.st.unit, lastQty: qAmt.st.qty, lastMeal: qMeal }); await saveKey('foods');
-  closeQuick(); render();
-  toast(`${f.name}: ${e.kcal} kcal → ${MEALS[qMeal].toLowerCase()}`, 2200, async () => { day().entries = day().entries.filter(x => x.id !== e.id); f.uses = Math.max(0, f.uses - 1); await saveDay(); await saveKey('foods'); render(); });
+  if (!confirm('Delete this food? Logged entries stay.')) return;
+  S.foods = S.foods.filter(f => f.id !== editingProduct); await saveKey('foods'); toast('Food deleted'); closeSheet();
 };
-// saved meals (combos)
+
+/* ⋯ More: saved meals + copy */
+function openMore() { renderMore(); $('#moreSheet').classList.remove('hidden'); document.body.style.overflow = 'hidden'; }
+function closeMore() { $('#moreSheet').classList.add('hidden'); document.body.style.overflow = ''; }
+$('#moreBtn').onclick = openMore; $('#moreClose').onclick = closeMore; $('#moreSheet').onclick = e => { if (e.target.id === 'moreSheet') closeMore(); };
+function renderMore() {
+  $('#comboList').innerHTML = S.combos.length ? S.combos.map(c => `<div class="mrowc"><button type="button" class="btn grow" data-combo="${c.id}">${esc(c.name)} <small class="muted">${c.items.length} items · ${fmt(c.items.reduce((s, e) => s + (+e.kcal || 0), 0))} kcal</small></button><button type="button" class="x" data-cdel="${c.id}" aria-label="Delete ${esc(c.name)}">✕</button></div>`).join('')
+    : '<p class="tiny muted">None yet. Save one of today\'s meals below.</p>';
+  const ms = Object.keys(MEALS).filter(m => day().entries.some(e => e.meal === m));
+  $('#saveMealRow').innerHTML = ms.map(m => `<button type="button" data-savemeal="${m}">💾 Save ${MEALS[m].toLowerCase()}</button>`).join('');
+  $$('#comboList [data-combo]').forEach(b => b.onclick = () => { closeMore(); logCombo(b.dataset.combo); });
+  $$('#comboList [data-cdel]').forEach(b => b.onclick = () => deleteCombo(b.dataset.cdel));
+  $$('#saveMealRow [data-savemeal]').forEach(b => b.onclick = () => saveCombo(b.dataset.savemeal));
+  const wd = parseYmd(curDay).toLocaleDateString('en-GB', { weekday: 'short' });
+  $('#copyLastWk').textContent = `Same as last ${wd}`;
+  $('#copyYest').textContent = curDay === today() ? 'Copy yesterday' : 'Copy day before';
+}
 async function saveCombo(meal) {
-  const items = day().entries.filter(e => e.meal === meal);
-  if (!items.length) return;
-  const name = prompt(`Name this ${MEALS[meal].toLowerCase()} combo (${items.length} items):`, 'Standard ' + MEALS[meal].toLowerCase());
-  if (!name) return;
+  const items = day().entries.filter(e => e.meal === meal); if (!items.length) return;
+  const name = prompt(`Name this meal (${items.length} items):`, 'Standard ' + MEALS[meal].toLowerCase()); if (!name) return;
   S.combos.push({ id: uid(), name: name.trim(), meal, items: items.map(({ id, time, ...rest }) => rest), created: Date.now() });
-  await DB.set('meals', S.combos); toast(`Saved meal “${name.trim()}”`); renderQuick();
+  await DB.set('meals', S.combos); toast(`Saved meal “${name.trim()}”`); renderMore();
 }
 async function addEntries(list, label) {
-  const D = day(), ids = [];
-  for (const e of list) { const n = { ...e, id: uid(), time: Date.now() }; ids.push(n.id); D.entries.push(n);
-    const f = e.productId && S.foods.find(x => x.id === e.productId); if (f) { f.uses = (f.uses || 0) + 1; f.lastUsed = Date.now(); } }
+  const snap = snapshot(), D = day();
+  for (const e of list) { D.entries.push({ ...e, id: uid(), time: Date.now() }); const f = e.productId && S.foods.find(x => x.id === e.productId); if (f) { f.uses = (f.uses || 0) + (e.n || 1); f.lastUsed = Date.now(); } }
   await saveDay(); await saveKey('foods'); render();
-  const kc = list.reduce((s, e) => s + (+e.kcal || 0), 0);
-  toast(`${label}: ${list.length} items, ${fmt(kc)} kcal`, 2200, async () => {
-    day().entries = day().entries.filter(x => !ids.includes(x.id));
-    for (const e of list) { const f = e.productId && S.foods.find(x => x.id === e.productId); if (f) f.uses = Math.max(0, (f.uses || 1) - 1); }
-    await saveDay(); await saveKey('foods'); render();
-  });
+  toast(`${label}: ${list.length} items, ${fmt(list.reduce((s, e) => s + (+e.kcal || 0), 0))} kcal`, 2200, () => restore(snap));
 }
 function logCombo(id) { const c = S.combos.find(x => x.id === id); if (c) addEntries(c.items.map(e => ({ ...e, meal: c.meal })), c.name); }
-async function deleteCombo(id) { const c = S.combos.find(x => x.id === id); if (!c || !confirm(`Delete saved meal “${c.name}”?`)) return; S.combos = S.combos.filter(x => x.id !== id); await DB.set('meals', S.combos); renderQuick(); }
+async function deleteCombo(id) { const c = S.combos.find(x => x.id === id); if (!c || !confirm(`Delete saved meal “${c.name}”?`)) return; S.combos = S.combos.filter(x => x.id !== id); await DB.set('meals', S.combos); renderMore(); }
 async function copyFrom(src) {
   const list = (S.days[src] && S.days[src].entries) || [];
   if (!list.length) { toast(`Nothing logged on ${dayLabel(src)}`); return; }
-  if (day().entries.length && !confirm(`Add ${list.length} items from ${dayLabel(src)} to ${dayLabel(curDay).toLowerCase()}? (${day().entries.length} already logged)`)) return;
-  addEntries(list.map(({ id, time, ...rest }) => rest), 'Copied ' + dayLabel(src));
+  if (day().entries.length && !confirm(`Add ${list.length} items from ${dayLabel(src)}? (${day().entries.length} already logged)`)) return;
+  closeMore(); addEntries(list.map(({ id, time, ...rest }) => rest), 'Copied ' + dayLabel(src));
 }
 $('#copyYest').onclick = () => copyFrom(addDays(curDay, -1));
 $('#copyLastWk').onclick = () => copyFrom(addDays(curDay, -7));
@@ -873,17 +865,18 @@ async function getWorker(progress) {
 }
 async function handleLabel(file) {
   if (!file) return;
-  $('#ocrBox').classList.remove('hidden'); $('#productForm').classList.add('hidden'); $('#ocrStatus').textContent = 'Opening photo…';
+  const st = $('#scanStatus');
+  $('#ocrBox').classList.remove('hidden'); st.textContent = 'Opening photo…';
   const { img, url } = await fileToImage(file);
-  $('#ocrPreview').src = url; $('#ocrBar').style.width = '3%'; $('#ocrText').textContent = '';
-  const st = $('#ocrStatus'); ocrPass = 0; ocrPasses = 1;
+  setPhoto(url); currentThumb = thumbFrom(img, 200);
+  $('#ocrBar').style.width = '3%'; $('#ocrText').textContent = '';
+  ocrPass = 0; ocrPasses = 1;
   st.textContent = ocrWorker ? 'Reading the label…' : 'Loading the reader (first time ≈15 MB, then offline)…';
   try {
     const w = await getWorker(m => {
       if (m.status === 'recognizing text') { const f = (ocrPass + m.progress) / ocrPasses; $('#ocrBar').style.width = (30 + f * 70) + '%'; st.textContent = 'Reading the label… ' + Math.round(f * 100) + '%'; }
       else if (m.progress != null) $('#ocrBar').style.width = Math.max(3, m.progress * 30) + '%';
     });
-    // read the label in up to three passes (different clean-ups); numbers are cross-checked against the label's kcal
     const passes = [['contrast', '6'], ['otsu-lines', '6'], ['otsu', '6']], texts = [];
     let r = null;
     for (let i = 0; i < passes.length; i++) {
@@ -897,52 +890,51 @@ async function handleLabel(file) {
     $('#ocrBar').style.width = '100%';
     $('#ocrText').textContent = texts.map((t, i) => `--- pass ${i + 1} ---\n${t}`).join('\n');
     const n = ['kcal', 'protein', 'carbs', 'fat'].filter(k => r[k] != null).length;
-    st.textContent = n ? `Found ${r.found.length} values${r.checkOk === false ? ' – some look off, please check' : r.fixed.length ? ' (orange = decimal fixed by the kcal check)' : ''}. Check them, add a name and the grams you ate.` : "Couldn't find nutrition values. Try a sharper, straight-on photo that fills the frame, or type them in below.";
-    fillForm({ name: '', per100: { kcal: r.kcal, kj: r.kj, protein: r.protein, carbs: r.carbs, fat: r.fat, sugar: r.sugar, satfat: r.satfat, fibre: r.fibre, salt: r.salt }, basis: r.basis, thumb: thumbFrom(img) });
-    for (const k of r.fixed) if (FF[k]) $(FF[k]).classList.add('fixed');
-    for (const k of ['kcal', 'protein', 'carbs', 'fat']) if (r[k] == null) $(FF[k]).classList.add('missing');
-    $('#fName').focus({ preventScroll: true });
-    $('#ocrBox').scrollIntoView({ block: 'start' });
-  } catch (err) {
-    console.error(err); st.textContent = 'OCR failed (' + (err.message || err) + '). You can type the values in below.';
-    fillForm({ thumb: thumbFrom(img) });
-  }
+    if (n) {
+      scanExtra = { sugar: r.sugar, satfat: r.satfat, fibre: r.fibre, salt: r.salt, kj: r.kj };
+      fillFromPer100({ kcal: r.kcal, protein: r.protein, carbs: r.carbs, fat: r.fat }, { mark: { fixed: r.fixed } });
+      st.textContent = `✓ Filled in for ${gTxt(+$('#fAmountG').value)} (label is per 100 ${r.basis === '100ml' ? 'ml' : 'g'}). Check them against the photo${r.checkOk === false ? ' – some look off' : ''}.`;
+    } else st.textContent = "Couldn't read the numbers. Try a sharper, straight-on photo, or type them in.";
+    $('#ocrBox').classList.add('hidden');
+    $('#nutri').scrollIntoView({ block: 'start' });
+  } catch (err) { console.error(err); st.textContent = 'Reading failed (' + (err.message || err) + '). Type the values in.'; }
 }
 $('#labelCam').onchange = e => { handleLabel(e.target.files[0]); e.target.value = ''; };
-$('#labelFile').onchange = e => { handleLabel(e.target.files[0]); e.target.value = ''; };
 
 /* ---------- Barcode + Open Food Facts ---------- */
-let scanStream = null, scanTimer = null, zxReader = null;
+let scanStream = null, scanTimer = null, zxReader = null, scanGen = 0;
 async function lookupBarcode(code) {
-  code = String(code || '').replace(/\D/g, '');
-  if (code.length < 6) { $('#bcStatus').textContent = 'That barcode looks too short.'; return; }
+  scanGen++; code = String(code || '').replace(/\D/g, '');
+  if (code.length < 6) { $('#scanStatus').textContent = 'That barcode looks too short.'; return; }
   $('#bcInput').value = code;
-  const local = S.foods.find(f => f.barcode === code);
-  if (local) { $('#bcStatus').textContent = 'Found in my foods.'; fillForm(local); return; }
-  $('#bcStatus').textContent = 'Looking up ' + code + '…';
+  const local = S.foods.find(f => f.barcode === code && f.id !== editingProduct);
+  if (local) { openFood(local.id); $('#bcInput').value = code; $('#scanStatus').textContent = 'Already in your foods – opened it.'; return; }
+  $('#scanStatus').textContent = 'Looking up ' + code + '…';
   try {
     const r = await fetch(`https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=product_name,product_name_en,product_name_nl,product_name_no,brands,nutriments,serving_quantity,image_front_small_url,image_nutrition_small_url`);
     const j = await r.json();
-    if (j.status !== 1 || !j.product) { $('#bcStatus').textContent = 'Not in Open Food Facts. Scan the label instead, or enter it manually.'; fillForm({ barcode: code }); $('#fBarcode').value = code; return; }
+    $('#fBarcode').value = code;
+    if (j.status !== 1 || !j.product) { $('#scanStatus').textContent = 'Not found in Open Food Facts. Scan the label or type the values.'; return; }
     const p = j.product, n = p.nutriments || {};
     const g = k => n[k + '_100g'] != null ? r1(n[k + '_100g']) : undefined;
     let kcal = n['energy-kcal_100g']; if (kcal == null && n['energy-kj_100g'] != null) kcal = n['energy-kj_100g'] / 4.184; if (kcal == null && n.energy_100g != null) kcal = n.energy_100g / 4.184;
-    let thumb = null;
     const imgUrl = p.image_front_small_url || p.image_nutrition_small_url;
-    if (imgUrl) { try { thumb = thumbFrom(await loadImage(imgUrl), 200); } catch (e) { thumb = imgUrl; } }
-    fillForm({ name: p.product_name || p.product_name_en || p.product_name_nl || p.product_name_no || 'Product ' + code, brand: (p.brands || '').split(',')[0].trim(), barcode: code,
-      per100: { kcal: kcal != null ? r0(kcal) : undefined, kj: g('energy-kj'), protein: g('proteins'), carbs: g('carbohydrates'), fat: g('fat'), sugar: g('sugars'), satfat: g('saturated-fat'), fibre: g('fiber'), salt: g('salt') },
-      servingG: p.serving_quantity ? r0(p.serving_quantity) : undefined, thumb });
-    $('#bcStatus').textContent = 'Found on Open Food Facts – check the values and enter the grams.';
-  } catch (err) { $('#bcStatus').textContent = 'Lookup failed (offline?). Try again later or enter it manually.'; }
+    if (imgUrl) { try { currentThumb = thumbFrom(await loadImage(imgUrl), 200); } catch (e) { currentThumb = imgUrl; } setPhoto(currentThumb); }
+    const nm = p.product_name || p.product_name_en || p.product_name_nl || p.product_name_no || '';
+    if (!$('#fName').value && nm) $('#fName').value = nm;
+    scanExtra = { sugar: g('sugars'), satfat: g('saturated-fat'), fibre: g('fiber'), salt: g('salt'), kj: g('energy-kj') };
+    fillFromPer100({ kcal: kcal != null ? r0(kcal) : undefined, protein: g('proteins'), carbs: g('carbohydrates'), fat: g('fat') }, { amount: p.serving_quantity ? r0(p.serving_quantity) : 100 });
+    $('#bcBox').classList.add('hidden');
+    $('#scanStatus').textContent = `✓ Found on Open Food Facts – filled in for ${gTxt(+$('#fAmountG').value)}. Change the amount if you eat a different portion.`;
+  } catch (err) { $('#scanStatus').textContent = 'Lookup failed (offline?). Try again later or type the values.'; }
 }
 $('#bcLookup').onclick = () => lookupBarcode($('#bcInput').value);
 $('#bcInput').onkeydown = e => { if (e.key === 'Enter') lookupBarcode($('#bcInput').value); };
 async function hasNativeDetector() { try { return 'BarcodeDetector' in window && (await BarcodeDetector.getSupportedFormats()).includes('ean_13'); } catch (e) { return false; } }
-$('#bcScan').onclick = async () => {
-  stopScan();
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('#bcStatus').textContent = 'Camera not available here – use “From photo” or type the number.'; return; }
-  $('#bcVideoWrap').classList.remove('hidden'); $('#bcStatus').textContent = 'Point the camera at the barcode…';
+$('#scanBcBtn').onclick = async () => {
+  stopScan(); $('#bcBox').classList.remove('hidden'); const gen = scanGen;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('#scanStatus').textContent = 'No camera here – type the number or use a photo.'; return; }
+  $('#bcVideoWrap').classList.remove('hidden'); $('#scanStatus').textContent = 'Point the camera at the barcode…';
   const video = $('#bcVideo');
   try {
     if (await hasNativeDetector()) {
@@ -957,7 +949,7 @@ $('#bcScan').onclick = async () => {
       zxReader = new ZXing.BrowserMultiFormatReader(hints);
       await zxReader.decodeFromConstraints({ video: { facingMode: 'environment' } }, video, (res) => { if (res) { const v = res.getText(); stopScan(); navigator.vibrate && navigator.vibrate(80); lookupBarcode(v); } });
     }
-  } catch (err) { stopScan(); $('#bcStatus').textContent = 'Could not open the camera (' + (err.name || err) + '). Use “From photo” or type the number.'; }
+  } catch (err) { stopScan(); if (gen === scanGen) $('#scanStatus').textContent = 'Could not open the camera (' + (err.name || err) + '). Type the number or use a photo.'; }
 };
 function stopScan() {
   clearTimeout(scanTimer);
@@ -968,14 +960,14 @@ function stopScan() {
 $('#bcStop').onclick = stopScan;
 $('#bcPhoto').onchange = async e => {
   const f = e.target.files[0]; e.target.value = ''; if (!f) return;
-  $('#bcStatus').textContent = 'Reading barcode from photo…';
+  $('#scanStatus').textContent = 'Reading barcode from photo…';
   const { img } = await fileToImage(f);
   try {
     let code = null;
     if (await hasNativeDetector()) { const c = await new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'] }).detect(img); if (c.length) code = c[0].rawValue; }
     if (!code) { await loadScript('vendor/zxing.min.js'); const rd = new ZXing.BrowserMultiFormatReader(); try { code = (await rd.decodeFromImageElement(img)).getText(); } catch (e) { } }
-    if (code) lookupBarcode(code); else $('#bcStatus').textContent = 'No barcode found in the photo. Try closer, or type the number.';
-  } catch (err) { $('#bcStatus').textContent = 'No barcode found. Type the number instead.'; }
+    if (code) lookupBarcode(code); else $('#scanStatus').textContent = 'No barcode found in the photo. Try closer, or type the number.';
+  } catch (err) { $('#scanStatus').textContent = 'No barcode found. Type the number instead.'; }
 };
 
 /* ---------- start ---------- */
@@ -987,7 +979,7 @@ async function start() {
   else if (!S.settings.pinAsked) await showLock('first');
   await loadAll();
   const p = new URLSearchParams(location.search);
-  setView(p.get('view') || (S.profile.weight ? 'today' : 'me'));
+  setView(p.get('view') || 'today');
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => { });
 }
