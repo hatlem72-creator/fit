@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="robots" content="noindex,nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Fit Log">
+<title>Fit Log</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="css/app.css?v=1">
+</head>
+<body>
+<!-- Lock / first-run -->
+<section id="lock" class="lock hidden" aria-live="polite">
+  <div class="lock-card">
+    <div class="logo-mark">🔥</div>
+    <h1 id="lockTitle">Fit Log</h1>
+    <p id="lockMsg" class="muted">Enter your PIN</p>
+    <input id="pinInput" class="pin" type="password" inputmode="numeric" autocomplete="off" maxlength="12" placeholder="••••">
+    <input id="pinInput2" class="pin hidden" type="password" inputmode="numeric" autocomplete="off" maxlength="12" placeholder="Repeat PIN">
+    <button id="pinBtn" class="btn primary big">Unlock</button>
+    <button id="pinSkip" class="btn ghost hidden">Skip for now</button>
+    <p id="pinErr" class="err"></p>
+    <p class="tiny muted" id="lockNote">Your data never leaves this phone.</p>
+  </div>
+</section>
+
+<header class="top">
+  <button class="iconbtn" id="prevDay" aria-label="Previous day">‹</button>
+  <div class="daytitle"><span id="dayLabel">Today</span><input type="date" id="dayPicker" aria-label="Pick a date"></div>
+  <button class="iconbtn" id="nextDay" aria-label="Next day">›</button>
+</header>
+
+<main>
+<!-- TODAY -->
+<section id="view-today" class="view">
+  <div class="card hero">
+    <div class="ring-wrap">
+      <svg id="kcalRing" viewBox="0 0 120 120" class="ring"></svg>
+      <div class="ring-center"><div class="big-num" id="remainNum">0</div><div class="tiny" id="remainLbl">kcal left</div></div>
+    </div>
+    <div class="hero-stats">
+      <div><span class="lbl">Target</span><b id="tTarget">–</b></div>
+      <div><span class="lbl">Eaten</span><b id="tEaten">0</b></div>
+      <div><span class="lbl">Burnt <small id="burntSrc"></small></span><b id="tBurnt">–</b></div>
+      <div><span class="lbl">Balance</span><b id="tBalance">–</b></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="macro" data-m="protein"><div class="mrow"><span>Protein</span><span class="mval"></span></div><div class="bar"><i></i></div></div>
+    <div class="macro" data-m="carbs"><div class="mrow"><span>Carbs</span><span class="mval"></span></div><div class="bar"><i></i></div></div>
+    <div class="macro" data-m="fat"><div class="mrow"><span>Fat</span><span class="mval"></span></div><div class="bar"><i></i></div></div>
+  </div>
+  <div class="card water">
+    <div class="row between"><h3>💧 Water</h3><span id="waterVal" class="muted">0 / 2000 ml</span></div>
+    <div class="glasses" id="glasses"></div>
+    <div class="row gap"><button class="btn" id="waterMinus" aria-label="Remove a glass">− 250 ml</button><button class="btn primary" id="waterPlus" aria-label="Add a glass">+ 250 ml</button></div>
+  </div>
+  <div class="card act-mini" id="actMini"></div>
+  <div id="meals"></div>
+  <p class="tiny muted center" id="profileHint"></p>
+</section>
+
+<!-- ACTIVITY -->
+<section id="view-activity" class="view hidden">
+  <div class="card">
+    <h2>⌚ From your watch</h2>
+    <p class="tiny muted">Open <b>Huawei Health</b> → <b>Health</b> tab → tap the activity rings card, then copy the numbers here.</p>
+    <label class="field"><span>Active calories (kcal)</span><input id="aActive" type="number" inputmode="numeric" min="0" placeholder="e.g. 520"></label>
+    <label class="field"><span>Total calories burnt (kcal) <small>optional</small></span><input id="aTotal" type="number" inputmode="numeric" min="0" placeholder="e.g. 2650"></label>
+    <label class="field"><span>Steps</span><input id="aSteps" type="number" inputmode="numeric" min="0" placeholder="e.g. 9500"></label>
+    <h3>Workouts</h3>
+    <div id="workoutList"></div>
+    <div class="workout-add">
+      <select id="wType" aria-label="Workout type">
+        <option>Strength</option><option>Running</option><option>Walking</option><option>Cycling</option><option>Indoor cycling</option><option>Swimming</option><option>HIIT</option><option>Football</option><option>Hiking</option><option>Yoga</option><option>Cross trainer</option><option>Other</option>
+      </select>
+      <input id="wMin" type="number" inputmode="numeric" placeholder="min" aria-label="Minutes">
+      <input id="wKcal" type="number" inputmode="numeric" placeholder="kcal" aria-label="Workout kcal">
+      <button class="btn" id="wAdd">Add</button>
+    </div>
+    <button class="btn primary big" id="aSave">Save activity</button>
+    <p class="ok" id="aSaved"></p>
+  </div>
+  <div class="card">
+    <h3>Last 7 days</h3>
+    <div id="actHistory"></div>
+  </div>
+  <div class="card">
+    <h3>Import from Huawei Health</h3>
+    <p class="tiny muted">Pick the <b>.json</b> files from a Huawei data export, or a CSV file. Existing entries for the same day are updated, not duplicated.</p>
+    <label class="btn file">Choose files…<input id="importAct" type="file" accept=".json,.csv,application/json,text/csv,text/plain" multiple hidden></label>
+    <p id="importActMsg" class="ok"></p>
+    <details class="help"><summary>How do I get the export?</summary>
+      <ol>
+        <li>On your phone go to <b>Settings → Huawei ID (your name) → Privacy centre → Request your data</b> (in some versions: Huawei Health → <b>Me → Privacy management</b>).</li>
+        <li>Tick <b>Health</b>, set a password for the ZIP and submit. Huawei emails you a download link (can take a few hours up to a few days).</li>
+        <li>Download and unzip it (Files app, with your password).</li>
+        <li>Here, choose these files:<br><code>Sport per minute merged data &amp; description / sport per minute merged data.json</code> (steps + active calories per day) and<br><code>Motion path detail data &amp; description / motion path detail data.json</code> (workouts).</li>
+      </ol>
+      <p>CSV works too, with a header row like:<br><code>date,active_kcal,total_kcal,steps,workout,minutes</code></p>
+      <p>Huawei has no live web connection for the Watch Fit 4 Pro, so daily copying (≈10 seconds) is the quickest way. Tip: do it in the evening.</p>
+    </details>
+  </div>
+</section>
+
+<!-- WEEK -->
+<section id="view-week" class="view hidden">
+  <div class="card">
+    <div class="row between"><button class="iconbtn" id="prevWeek" aria-label="Previous week">‹</button><h2 id="weekLabel">This week</h2><button class="iconbtn" id="nextWeek" aria-label="Next week">›</button></div>
+    <div class="kpis">
+      <div><span class="lbl">Avg eaten</span><b id="wAvgEaten">–</b></div>
+      <div><span class="lbl">Avg burnt</span><b id="wAvgBurnt">–</b></div>
+      <div><span class="lbl">Week balance</span><b id="wBalance">–</b></div>
+      <div><span class="lbl">Training</span><b id="wTraining">–</b></div>
+    </div>
+    <div class="train-dots" id="trainDots"></div>
+    <div class="chartbox"><canvas id="weekChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h3>Average macros</h3>
+    <div class="chartbox small"><canvas id="macroChart"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="row between"><h3>Weight trend</h3><select id="weightRange" aria-label="Range"><option value="30">30 days</option><option value="90" selected>90 days</option><option value="365">1 year</option></select></div>
+    <div class="chartbox"><canvas id="weightChart"></canvas></div>
+    <p class="tiny muted" id="weightTrendTxt"></p>
+  </div>
+</section>
+
+<!-- ME -->
+<section id="view-me" class="view hidden">
+  <div class="card">
+    <h2>Profile & goal</h2>
+    <div class="grid2">
+      <label class="field"><span>Weight (kg)</span><input id="pWeight" type="number" step="0.1" inputmode="decimal"></label>
+      <label class="field"><span>Height (cm)</span><input id="pHeight" type="number" inputmode="numeric"></label>
+      <label class="field"><span>Age</span><input id="pAge" type="number" inputmode="numeric"></label>
+      <label class="field"><span>Sex</span><select id="pSex"><option value="male">Male</option><option value="female">Female</option></select></label>
+      <label class="field"><span>Training / week</span><input id="pSessions" type="number" min="0" max="14" inputmode="numeric"></label>
+      <label class="field"><span>Goal</span><select id="pGoal"><option value="lose">Lose weight</option><option value="maintain">Maintain</option><option value="gain">Gain weight</option></select></label>
+      <label class="field"><span>Target weight (kg)</span><input id="pTarget" type="number" step="0.1" inputmode="decimal"></label>
+      <label class="field"><span>Rate (kg / week)</span><select id="pRate"><option>0.25</option><option selected>0.5</option><option>0.75</option><option>1</option></select></label>
+    </div>
+    <details class="help"><summary>Macro settings</summary>
+      <div class="grid2">
+        <label class="field"><span>Protein (g per kg)</span><input id="pProt" type="number" step="0.1" inputmode="decimal" placeholder="auto"></label>
+        <label class="field"><span>Fat (% of kcal)</span><input id="pFat" type="number" inputmode="numeric" placeholder="27"></label>
+      </div>
+    </details>
+    <label class="check"><input type="checkbox" id="pAdaptive"> Use watch calories for the daily target <small class="muted">(target = burnt today ± goal, when entered)</small></label>
+    <label class="field"><span>Water goal (ml)</span><input id="pWater" type="number" step="250" inputmode="numeric" placeholder="2500"></label>
+    <button class="btn primary big" id="pSave">Save profile</button>
+    <p class="ok" id="pSaved"></p>
+  </div>
+  <div class="card" id="calcCard"></div>
+  <div class="card">
+    <h3>⚖️ Weight log</h3>
+    <div class="row gap"><input id="wtDate" type="date" aria-label="Date"><input id="wtKg" type="number" step="0.1" inputmode="decimal" placeholder="kg" aria-label="Weight in kg"><button class="btn primary" id="wtAdd">Add</button></div>
+    <div class="chartbox"><canvas id="weightChart2"></canvas></div>
+    <div id="wtList" class="list"></div>
+  </div>
+  <div class="card">
+    <h3>🔒 Privacy & backup</h3>
+    <p class="tiny muted">Everything is stored only in this browser on this device (IndexedDB). Nothing is sent to a server; only barcode look-ups ask Open Food Facts about the barcode number. Make a backup now and then, and use it to move to a new phone.</p>
+    <div class="row gap wrap">
+      <button class="btn" id="exportBtn">⬇️ Export backup</button>
+      <label class="btn file">⬆️ Import backup<input id="importBtn" type="file" accept=".json,application/json" hidden></label>
+    </div>
+    <p class="ok" id="backupMsg"></p>
+    <div class="row gap wrap">
+      <button class="btn" id="pinSetBtn">Set PIN</button>
+      <button class="btn" id="pinRemoveBtn">Remove PIN</button>
+      <button class="btn" id="lockNowBtn">Lock now</button>
+    </div>
+    <p class="tiny muted">The PIN is a privacy screen for this app on this device. It's stored as a salted hash. Forgot it? Clear the site data in your browser (you'd lose data without a backup).</p>
+    <button class="btn danger" id="wipeBtn">Delete all data</button>
+  </div>
+  <div class="card">
+    <h3>❓ Help</h3>
+    <details class="help"><summary>Add to home screen</summary><p>Android/Chrome: menu ⋮ → <b>Add to Home screen / Install app</b>. iPhone/Safari: Share → <b>Add to Home Screen</b>. It works offline afterwards.</p></details>
+    <details class="help"><summary>Scanning a nutrition label</summary><p>Tap <b>＋</b> → <b>Label photo</b>. Photograph the nutrition table straight on, filling the frame, with good light. The app reads it on your phone (English, Dutch, Norwegian), fills in the per-100 g values, and you can correct anything before saving. The first scan downloads the reading engine (~15 MB) once; after that it works offline.</p></details>
+    <details class="help"><summary>How the target is calculated</summary><p>BMR uses the Mifflin-St Jeor formula. TDEE = BMR × an activity factor from your training sessions per week (0: 1.2, 1–2: 1.375, 3–4: 1.55, 5–6: 1.725, 7+: 1.9). Losing or gaining 1 kg ≈ 7700 kcal, so 0.5 kg/week = ±550 kcal/day. The target never goes below 1500 kcal (men) / 1200 kcal (women). Protein defaults to 2.0 g/kg when losing, 1.6 maintaining and 1.8 gaining; fat is 27% of calories; carbs fill the rest.</p></details>
+    <details class="help"><summary>Burnt calories</summary><p>If you enter <b>total</b> calories from the watch, that's used. If you only enter <b>active</b> calories, burnt = BMR + active. With nothing entered, the estimated TDEE is shown (marked “est.”).</p></details>
+  </div>
+  <p class="tiny muted center">Fit Log v1 · data stays on your device</p>
+</section>
+</main>
+
+<nav class="tabs">
+  <button data-view="today" class="active"><span>🏠</span>Today</button>
+  <button data-view="activity"><span>⌚</span>Activity</button>
+  <button id="addFab" class="fab" aria-label="Add food"><span>＋</span></button>
+  <button data-view="week"><span>📊</span>Week</button>
+  <button data-view="me"><span>👤</span>Me</button>
+</nav>
+
+<!-- ADD FOOD SHEET -->
+<div id="sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-label="Add food">
+  <div class="sheet-head">
+    <button class="iconbtn" id="sheetClose" aria-label="Close">✕</button>
+    <h2 id="sheetTitle">Add food</h2>
+    <span></span>
+  </div>
+  <div class="chips" id="mealChips">
+    <button data-meal="breakfast">Breakfast</button><button data-meal="lunch">Lunch</button><button data-meal="dinner">Dinner</button><button data-meal="snacks">Snacks</button>
+  </div>
+  <div class="seg" id="modeSeg">
+    <button data-mode="label">📷 Label</button><button data-mode="barcode">▥ Barcode</button><button data-mode="manual">✏️ Manual</button><button data-mode="library">⭐ My foods</button>
+  </div>
+  <div class="sheet-body">
+    <div id="mode-label" class="mode">
+      <div class="row gap">
+        <label class="btn primary big grow">📸 Take photo<input id="labelCam" type="file" accept="image/*" capture="environment" hidden></label>
+        <label class="btn big grow">🖼️ Choose photo<input id="labelFile" type="file" accept="image/*" hidden></label>
+      </div>
+      <p class="tiny muted">Photograph the nutrition table (“Voedingswaarde”, “Næringsinnhold”, “Nutrition”) straight on.</p>
+      <div id="ocrBox" class="hidden">
+        <img id="ocrPreview" alt="Label photo">
+        <div class="progress"><i id="ocrBar"></i></div>
+        <p class="tiny muted" id="ocrStatus"></p>
+        <details class="help"><summary>Recognised text</summary><pre id="ocrText"></pre></details>
+      </div>
+    </div>
+    <div id="mode-barcode" class="mode hidden">
+      <div class="row gap">
+        <button class="btn primary big grow" id="bcScan">📷 Scan barcode</button>
+        <label class="btn big grow">🖼️ From photo<input id="bcPhoto" type="file" accept="image/*" hidden></label>
+      </div>
+      <div id="bcVideoWrap" class="hidden"><video id="bcVideo" playsinline muted></video><div class="scanline"></div><button class="btn" id="bcStop">Stop camera</button></div>
+      <div class="row gap"><input id="bcInput" type="text" inputmode="numeric" placeholder="Type barcode (EAN)" aria-label="Barcode"><button class="btn" id="bcLookup">Look up</button></div>
+      <p class="tiny muted" id="bcStatus">Looks the product up in the free Open Food Facts database.</p>
+    </div>
+    <div id="mode-library" class="mode hidden">
+      <input id="libSearch" type="search" placeholder="Search my foods…" aria-label="Search my foods">
+      <div id="libList" class="list"></div>
+    </div>
+    <form id="productForm" class="mode hidden" autocomplete="off">
+      <div class="prod-head"><img id="fThumb" class="thumb hidden" alt=""><div class="grow">
+        <label class="field"><span>Name</span><input id="fName" required placeholder="e.g. Greek yoghurt"></label>
+        <label class="field"><span>Brand <small>optional</small></span><input id="fBrand"></label>
+      </div></div>
+      <div class="row between"><b id="basisLbl">Per 100 g</b><label class="check small"><input type="checkbox" id="fWhole"> values are for the whole portion</label></div>
+      <div class="grid3">
+        <label class="field"><span>kcal</span><input id="fKcal" type="number" step="any" inputmode="decimal" required></label>
+        <label class="field"><span>Protein g</span><input id="fProtein" type="number" step="any" inputmode="decimal"></label>
+        <label class="field"><span>Carbs g</span><input id="fCarbs" type="number" step="any" inputmode="decimal"></label>
+        <label class="field"><span>Fat g</span><input id="fFat" type="number" step="any" inputmode="decimal"></label>
+        <label class="field"><span>Sugars g</span><input id="fSugar" type="number" step="any" inputmode="decimal"></label>
+        <label class="field"><span>Sat. fat g</span><input id="fSatfat" type="number" step="any" inputmode="decimal"></label>
+        <label class="field"><span>Fibre g</span><input id="fFibre" type="number" step="any" inputmode="decimal"></label>
+        <label class="field"><span>Salt g</span><input id="fSalt" type="number" step="any" inputmode="decimal"></label>
+        <label class="field"><span>kJ</span><input id="fKj" type="number" step="any" inputmode="decimal"></label>
+      </div>
+      <p class="warn tiny" id="fCheck"></p>
+      <label class="field big-field" id="gramsField"><span>Amount eaten (g)</span><input id="fGrams" type="number" step="any" inputmode="decimal" value="100"></label>
+      <div class="chips small" id="gramChips"></div>
+      <div class="portion-preview" id="fPreview"></div>
+      <div class="row gap wrap">
+        <label class="check"><input type="checkbox" id="fSaveLib" checked> Save to my foods</label>
+        <label class="check"><input type="checkbox" id="fFav"> ⭐ Favourite</label>
+      </div>
+      <input type="hidden" id="fBarcode">
+      <button class="btn primary big" type="submit" id="fSubmit">Add to breakfast</button>
+      <button class="btn danger hidden" type="button" id="fDelete">Remove from log</button>
+    </form>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="js/calc.js?v=1"></script>
+<script src="js/labelparse.js?v=1"></script>
+<script src="js/importers.js?v=1"></script>
+<script src="vendor/chart.umd.min.js" defer></script>
+<script src="js/app.js?v=1" defer></script>
+</body>
+</html>
