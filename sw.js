@@ -9,7 +9,15 @@ self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).catch(() => { }));
 });
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== BIG).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil((async () => {
+    const keys = await caches.keys(), old = keys.filter(k => k !== VERSION && k !== BIG);
+    // pages from versions before v4 can't reload themselves after an update, so reload them once from here
+    const fromLegacy = old.some(k => /^fitlog-v[1-3]$/.test(k));
+    await Promise.all(old.map(k => caches.delete(k)));
+    await self.clients.claim();
+    // (not awaited: the reload's own fetch waits for activation to finish)
+    if (fromLegacy) self.clients.matchAll({ type: 'window' }).then(cs => cs.forEach(c => { const u = new URL(c.url); u.searchParams.set('updated', '1'); c.navigate(u.href).catch(() => { }); }));
+  })());
 });
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);

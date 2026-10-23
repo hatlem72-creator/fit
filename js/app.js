@@ -1018,9 +1018,14 @@ async function start() {
       document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => { }); });
     }).catch(() => { });
   }
-  if (sessionStorage.getItem('fitlog-updated')) { sessionStorage.removeItem('fitlog-updated'); toast('✓ Updated to the latest version'); }
+  const qs = new URLSearchParams(location.search);
+  if (sessionStorage.getItem('fitlog-updated') || qs.has('updated')) {
+    sessionStorage.removeItem('fitlog-updated');
+    if (qs.has('updated')) { qs.delete('updated'); history.replaceState(null, '', location.pathname + (qs.toString() ? '?' + qs : '') + location.hash); }
+    toast('✓ Updated to the latest version');
+  }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => { });
 }
-window.FitLog = { version: 4, N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
+window.FitLog = { version: 4, build: '4.1', N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
 start();
 })();
