@@ -193,3 +193,4 @@ details.help{margin:8px 0;font-size:.9rem}details.help summary{cursor:pointer;fo
 .hero-stats .bx{display:block;font-size:.75rem;line-height:1.2;height:1.2em;color:var(--accent);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .hero-stats div{min-width:0}
 .wkf{margin:8px 0 0}.wkf input{max-width:9em}
+.burnf{margin-top:10px}.burnf input{max-width:9em}

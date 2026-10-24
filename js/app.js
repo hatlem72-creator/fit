@@ -48,7 +48,7 @@ async function loadAll() {
   await migrate();
 }
 /* schema migration: v1 -> v2 only adds fields, never removes or rewrites existing data */
-const SCHEMA = 7;
+const SCHEMA = 8;
 async function migrate() {
   const p = S.profile;
   if ((p.schema || 1) >= SCHEMA) return;
@@ -69,6 +69,7 @@ async function migrate() {
   if (p.mFatAuto == null) p.mFatAuto = true;
   // v5: weekly habits (one session each per Mon–Sun week)
   if (!Array.isArray(p.weekly)) p.weekly = Calc.PLAN.weekly.map(x => ({ ...x }));
+  if (was < 8 && !(+p.burnEst > 0)) p.burnEst = Calc.PLAN.burnEst;   // v8: fixed daily burn estimate (2450)
   // v6: each weekly habit has a fixed kcal per session that is added to that day's burnt; logged sessions get the new values
   if (was < 6) {
     const def = Object.fromEntries(Calc.PLAN.weekly.map(x => [x.id, x.kcal]));
@@ -94,7 +95,7 @@ async function migrate() {
   }
   await DB.set('profile', p);
 }
-function applyPlan(p) { const P = Calc.PLAN; Object.assign(p, { manual: true, mKcal: P.mKcal, mProtMin: P.mProtMin, mProtMax: P.mProtMax, mCarbMin: P.mCarbMin, mCarbMax: P.mCarbMax, mFatAuto: true, planDefault: true }); }
+function applyPlan(p) { const P = Calc.PLAN; Object.assign(p, { manual: true, mKcal: P.mKcal, mProtMin: P.mProtMin, mProtMax: P.mProtMax, mCarbMin: P.mCarbMin, mCarbMax: P.mCarbMax, mFatAuto: true, planDefault: true, burnEst: P.burnEst }); }
 function firstWeight() { const w = [...S.weights].sort((a, b) => a.date < b.date ? -1 : 1); return w.length ? w[0].kg : null; }
 function day(d = curDay) { return S.days[d] || (S.days[d] = { entries: [], activity: {}, workouts: [], habits: {} }); }
 const saveDay = (d = curDay) => DB.set('day:' + d, day(d));
@@ -449,7 +450,7 @@ $('#weightRange').onchange = () => renderWeek();
 
 /* ---------- ME ---------- */
 const PF = { weight: '#pWeight', height: '#pHeight', age: '#pAge', sex: '#pSex', sessions: '#pSessions', goal: '#pGoal', targetWeight: '#pTarget', rate: '#pRate', proteinPerKg: '#pProt', fatPct: '#pFat',
-  startWeight: '#pStart', lossGoal: '#pLoss', stepsGoal: '#pStepsGoal', rowGoal: '#pRowGoal',
+  startWeight: '#pStart', lossGoal: '#pLoss', burnEst: '#pBurnEst', stepsGoal: '#pStepsGoal', rowGoal: '#pRowGoal',
   mKcal: '#mKcal', mProtMin: '#mProtMin', mProtMax: '#mProtMax', mCarbMin: '#mCarbMin', mCarbMax: '#mCarbMax', mFatMin: '#mFatMin', mFatMax: '#mFatMax' };
 const STR = new Set(['sex', 'goal']);
 function renderMe() {
@@ -507,12 +508,12 @@ function renderCalc() {
   const deficit = t.tdee - ef.kcal, wk = p.manual && deficit > 0 ? deficit * 7 / Calc.KCAL_PER_KG : null;
   const weeks = gw && p.weight ? (wk ? Math.abs(p.weight - gw) / wk : t.weeksToGoal) : null;
   $('#calcCard').innerHTML = `<h3>Your numbers ${p.manual ? '<small class="muted">(manual targets)</small>' : ''}</h3>
-   <div class="kpis"><div><span class="lbl">BMR (Mifflin-St Jeor)</span><b>${fmt(t.bmr)} kcal</b></div><div><span class="lbl">TDEE (× ${t.factor})</span><b>${fmt(t.tdee)} kcal</b></div>
+   <div class="kpis"><div><span class="lbl">BMR (Mifflin-St Jeor)</span><b>${fmt(t.bmr)} kcal</b></div><div><span class="lbl">${t.fixedBurn ? 'Daily burn (est.)' : `TDEE (× ${t.factor})`}</span><b>${fmt(t.tdee)} kcal</b></div>
    <div><span class="lbl">Daily target${p.manual ? ' (manual)' : ''}</span><b style="color:var(--brand)">${fmt(ef.kcal)} kcal</b></div><div><span class="lbl">BMI</span><b>${r1(t.bmi)}</b></div>
    <div><span class="lbl">Protein</span><b>${rg(ef.protein)}</b></div><div><span class="lbl">Carbs</span><b>${rg(ef.carbs)}</b></div><div><span class="lbl">Fat</span><b>${rg(ef.fat)}</b></div>
    <div><span class="lbl">Goal weight</span><b>${gw ? r1(gw) + ' kg' : '–'}</b></div>
    <div><span class="lbl">To goal</span><b>${weeks ? '≈ ' + Math.ceil(weeks) + ' weeks' : '–'}</b></div></div>
-   <p class="tiny muted">${p.manual ? `Your fixed target is ${fmt(Math.abs(deficit))} kcal/day ${deficit >= 0 ? 'below' : 'above'} the estimated TDEE${wk ? ` (≈ ${r1(wk)} kg/week)` : ''}. Calculated suggestion: ${fmt(t.kcal)} kcal.` : goalTxt + (t.floored ? ' · capped at the safe minimum' : '') + '.'}${rc ? ' Recomposition: keep protein high and train strength to hold on to muscle while losing fat.' : ''}</p>`;
+   <p class="tiny muted">${p.manual ? `Your fixed target is ${fmt(Math.abs(deficit))} kcal/day ${deficit >= 0 ? 'below' : 'above'} the ${t.fixedBurn ? 'daily burn estimate' : 'estimated TDEE'}${wk ? ` (≈ ${r1(wk)} kg/week)` : ''}. Calculated suggestion: ${fmt(t.kcal)} kcal.` : goalTxt + (t.floored ? ' · capped at the safe minimum' : '') + '.'}${rc ? ' Recomposition: keep protein high and train strength to hold on to muscle while losing fat.' : ''}</p>`;
 }
 Object.values(PF).forEach(id => $(id).addEventListener('input', renderCalc));
 $('#pAdaptive').onchange = renderCalc; $('#mFatAuto').onchange = renderCalc;
@@ -531,9 +532,9 @@ $('#planBtn').onclick = async () => {
   const P = Calc.PLAN;
   $('#pManual').checked = true; $('#mFatAuto').checked = true;
   $('#mKcal').value = P.mKcal; $('#mProtMin').value = P.mProtMin; $('#mProtMax').value = P.mProtMax; $('#mCarbMin').value = P.mCarbMin; $('#mCarbMax').value = P.mCarbMax;
-  $('#pStepsGoal').value = P.stepsGoal; $('#pRowGoal').value = P.rowGoal; S.profile.weekly = P.weekly.map(x => ({ ...x })); $$('#weeklyMe [data-whk]').forEach(el => { const d = P.weekly.find(x => x.id === el.dataset.whk); if (d) el.value = d.kcal; });
+  $('#pBurnEst').value = P.burnEst; $('#pStepsGoal').value = P.stepsGoal; $('#pRowGoal').value = P.rowGoal; S.profile.weekly = P.weekly.map(x => ({ ...x })); $$('#weeklyMe [data-whk]').forEach(el => { const d = P.weekly.find(x => x.id === el.dataset.whk); if (d) el.value = d.kcal; });
   $('#pGoal').value = 'recomp'; if (!$('#pStart').value) $('#pStart').value = latestWeight() || $('#pWeight').value || ''; $('#pLoss').value = P.lossGoal;
-  renderCalc(); await saveProfile('#tSaved'); $('#tSaved').textContent = "✓ My plan applied: 1,870 kcal, protein 180–190 g, carbs 100–130 g, recomp −10 kg, weekly Triceps / Biceps / Shoulders 1 h";
+  renderCalc(); await saveProfile('#tSaved'); $('#tSaved').textContent = "✓ My plan applied: 1,870 kcal, burn estimate 2,450 kcal, protein 180–190 g, carbs 100–130 g, recomp −10 kg, weekly Triceps / Biceps / Shoulders 1 h";
 };
 function upsertWeight(date, kg) { S.weights = S.weights.filter(w => w.date !== date); S.weights.push({ date, kg }); }
 function syncWeight() { const lw = latestWeight(); if (lw) { S.profile.weight = lw; saveKey('profile'); } }
@@ -1080,6 +1081,6 @@ async function start() {
   }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => { });
 }
-window.FitLog = { version: 8, build: '8.0', N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
+window.FitLog = { version: 9, build: '9.0', N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
 start();
 })();

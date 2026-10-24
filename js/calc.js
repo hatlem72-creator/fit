@@ -17,7 +17,9 @@
   function targets(p) {
     const B = bmr(p);
     const factor = activityFactor(p.sessions);
-    const tdee = B * factor;
+    const calcTdee = B * factor;
+    // a fixed daily burn estimate (Me → Targets) replaces the BMR × activity estimate everywhere
+    const tdee = +p.burnEst > 0 ? +p.burnEst : calcTdee;
     let rate = Math.abs(+p.rate || 0); // kg per week
     let delta = 0;
     if (p.goal === 'lose' || p.goal === 'recomp') delta = -rate * KCAL_PER_KG / 7;
@@ -38,7 +40,7 @@
       const diff = Math.abs(tw - w);
       weeksToGoal = diff / rate;
     }
-    return { bmr: Math.round(B), factor, tdee: Math.round(tdee), delta: Math.round(delta),
+    return { bmr: Math.round(B), factor, tdee: Math.round(tdee), calcTdee: Math.round(calcTdee), fixedBurn: +p.burnEst > 0, delta: Math.round(delta),
       kcal: Math.round(kcal), floored, protein: Math.round(protein), fat: Math.round(fat),
       carbs: Math.round(carbs), weeksToGoal, bmi: (w && p.height) ? w / Math.pow(p.height / 100, 2) : 0 };
   }
@@ -48,7 +50,7 @@
     return +p.targetWeight || 0;
   }
   // "My plan" preset (only applied when the user taps it / enables manual mode with empty fields)
-  const PLAN = { mKcal: 1870, mProtMin: 180, mProtMax: 190, mCarbMin: 100, mCarbMax: 130, mFatAuto: true, stepsGoal: 8000, rowGoal: 15, lossGoal: 10,
+  const PLAN = { mKcal: 1870, mProtMin: 180, mProtMax: 190, mCarbMin: 100, mCarbMax: 130, mFatAuto: true, burnEst: 2450, stepsGoal: 8000, rowGoal: 15, lossGoal: 10,
     weekly: [{ id: 'triceps', name: 'Triceps', min: 60, kcal: 275 }, { id: 'biceps', name: 'Biceps', min: 60, kcal: 275 }, { id: 'shoulders', name: 'Shoulders', min: 60, kcal: 325 }] };
   function autoFat(kcal, pMin, pMax, cMin, cMax) {
     const mid = (kcal - (pMin + pMax) / 2 * 4 - (cMin + cMax) / 2 * 4) / 9;
