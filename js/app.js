@@ -48,7 +48,7 @@ async function loadAll() {
   await migrate();
 }
 /* schema migration: v1 -> v2 only adds fields, never removes or rewrites existing data */
-const SCHEMA = 6;
+const SCHEMA = 7;
 async function migrate() {
   const p = S.profile;
   if ((p.schema || 1) >= SCHEMA) return;
@@ -89,13 +89,14 @@ async function migrate() {
     if (!Array.isArray(D.workouts)) { D.workouts = []; ch = true; }
     if (!D.activity) { D.activity = {}; ch = true; }
     if (!D.habits) { D.habits = {}; ch = true; }
+    if (was < 7) for (const k of ['steps', 'row']) if (D.habits[k] === false) { delete D.habits[k]; ch = true; }
     if (ch) await DB.set('day:' + d, D);
   }
   await DB.set('profile', p);
 }
 function applyPlan(p) { const P = Calc.PLAN; Object.assign(p, { manual: true, mKcal: P.mKcal, mProtMin: P.mProtMin, mProtMax: P.mProtMax, mCarbMin: P.mCarbMin, mCarbMax: P.mCarbMax, mFatAuto: true, planDefault: true }); }
 function firstWeight() { const w = [...S.weights].sort((a, b) => a.date < b.date ? -1 : 1); return w.length ? w[0].kg : null; }
-function day(d = curDay) { return S.days[d] || (S.days[d] = { entries: [], water: 0, activity: {}, workouts: [], habits: {} }); }
+function day(d = curDay) { return S.days[d] || (S.days[d] = { entries: [], activity: {}, workouts: [], habits: {} }); }
 const saveDay = (d = curDay) => DB.set('day:' + d, day(d));
 const saveKey = k => DB.set(k, S[k]);
 
@@ -178,7 +179,8 @@ function habitState(d) {
   const D = S.days[d] || {}, a = D.activity || {}, h = D.habits || {};
   const steps = +a.steps || 0, rowMin = (D.workouts || []).filter(isRow).reduce((s, w) => s + (+w.minutes || 0), 0);
   const sAuto = steps >= stepsGoal(), rAuto = rowMin >= rowGoal();
-  return { steps, rowMin, sAuto, rAuto, sDone: sAuto || !!h.steps, rDone: rAuto || !!h.row };
+  // h.steps / h.row: true or false = the user's own tick for that day (wins), missing = follow the auto tick
+  return { steps, rowMin, sAuto, rAuto, sDone: typeof h.steps === 'boolean' ? h.steps : sAuto, rDone: typeof h.row === 'boolean' ? h.row : rAuto };
 }
 function bothDone(d) { const h = habitState(d); return h.sDone && h.rDone; }
 function streak() {
@@ -285,11 +287,6 @@ function renderToday() {
     el.dataset.state = st;
   }
   renderHabits(); renderGoalProgress();
-  // water
-  const wGoal = +S.profile.water || 2500, w = day().water || 0;
-  $('#waterVal').textContent = `${fmt(w)} / ${fmt(wGoal)} ml`;
-  const n = Math.max(Math.ceil(wGoal / 250), Math.ceil(w / 250));
-  $('#glasses').innerHTML = Array.from({ length: n }, (_, i) => `<span class="${i < w / 250 ? 'full' : ''}"></span>`).join('');
   // activity mini
   const a = day().activity || {};
   $('#actMini').innerHTML = `<div><b>${a.active ? fmt(a.active) : '–'}</b><span class="tiny muted">active kcal</span></div><div><b>${a.steps ? fmt(a.steps) : '–'}</b><span class="tiny muted">steps</span></div><div><b>${workoutCount(curDay)}</b><span class="tiny muted">workouts</span></div>`;
@@ -299,17 +296,25 @@ function renderToday() {
 function renderHabits() {
   const h = habitState(curDay), D = day();
   $('#hStepsGoal').textContent = fmt(stepsGoal()); $('#hRowGoal').textContent = rowGoal();
-  $('#hStepsCb').checked = h.sDone; $('#hStepsCb').disabled = h.sAuto;
-  $('#hRowCb').checked = h.rDone; $('#hRowCb').disabled = h.rAuto;
-  $('#hStepsVal').textContent = h.steps ? `${fmt(h.steps)}${h.sAuto ? ' ✓ auto' : ''}` : 'no steps yet';
-  $('#hRowVal').textContent = h.rowMin ? `${h.rowMin} min${h.rAuto ? ' ✓ auto' : ''}` : 'not yet';
+  $('#hStepsCb').checked = h.sDone; $('#hStepsCb').disabled = false;
+  $('#hRowCb').checked = h.rDone; $('#hRowCb').disabled = false;
+  $('#hStepsVal').textContent = h.steps ? fmt(h.steps) : '';
+  $('#hRowVal').textContent = h.rowMin ? `${h.rowMin} min` : '';
   $('#hSteps').classList.toggle('done', h.sDone); $('#hRow').classList.toggle('done', h.rDone);
   $('#qRow').textContent = `+ Rowing ${rowGoal()} min`;
   const n = streak(); $('#streak').textContent = n ? `🔥 ${n}-day streak` : '';
   renderWeekly();
 }
-$('#hStepsCb').onchange = e => { day().habits = { ...(day().habits || {}), steps: e.target.checked }; saveDay(); renderToday(); };
-$('#hRowCb').onchange = e => { day().habits = { ...(day().habits || {}), row: e.target.checked }; saveDay(); renderToday(); };
+async function toggleDaily(key, name) {
+  const d = curDay, D = day(d), hs = habitState(d), was = D.habits ? D.habits[key] : undefined;
+  const auto = key === 'steps' ? hs.sAuto : hs.rAuto, now = !(key === 'steps' ? hs.sDone : hs.rDone);
+  D.habits = { ...(D.habits || {}) };
+  if (now === auto) delete D.habits[key]; else D.habits[key] = now;   // matching the auto value = no override needed
+  await saveDay(d); renderToday();
+  toast(now ? `${name} done ✓` : `${name} unticked`, 2200, async () => { const X = day(d); X.habits = { ...(X.habits || {}) }; if (was === undefined) delete X.habits[key]; else X.habits[key] = was; await saveDay(d); renderToday(); });
+}
+$('#hStepsCb').onchange = () => toggleDaily('steps', 'Steps');
+$('#hRowCb').onchange = () => toggleDaily('row', 'Rowing');
 $('#qRow').onclick = async () => { const D = day(); D.workouts = D.workouts || []; D.workouts.push({ type: 'Rowing', minutes: rowGoal(), kcal: 0, source: 'quick' }); await saveDay(); toast(`Rowing ${rowGoal()} min logged`); renderToday(); };
 $('#qSteps').onclick = () => { setView('activity'); setTimeout(() => $('#aSteps').focus(), 50); };
 function renderGoalProgress() {
@@ -324,8 +329,6 @@ function renderGoalProgress() {
 }
 function prodThumb(id) { const p = S.foods.find(f => f.id === id); return p && p.thumb; }
 function thumbHtml(src) { return src ? `<img class="thumb" src="${esc(src)}" alt="">` : `<div class="thumb ph">🍽️</div>`; }
-$('#waterPlus').onclick = () => { day().water = (day().water || 0) + 250; saveDay(); renderToday(); };
-$('#waterMinus').onclick = () => { day().water = Math.max(0, (day().water || 0) - 250); saveDay(); renderToday(); };
 $('#actMini').onclick = () => setView('activity');
 
 /* ---------- ACTIVITY ---------- */
@@ -445,7 +448,7 @@ $('#nextWeek').onclick = () => { weekOffset++; renderWeek(); };
 $('#weightRange').onchange = () => renderWeek();
 
 /* ---------- ME ---------- */
-const PF = { weight: '#pWeight', height: '#pHeight', age: '#pAge', sex: '#pSex', sessions: '#pSessions', goal: '#pGoal', targetWeight: '#pTarget', rate: '#pRate', proteinPerKg: '#pProt', fatPct: '#pFat', water: '#pWater',
+const PF = { weight: '#pWeight', height: '#pHeight', age: '#pAge', sex: '#pSex', sessions: '#pSessions', goal: '#pGoal', targetWeight: '#pTarget', rate: '#pRate', proteinPerKg: '#pProt', fatPct: '#pFat',
   startWeight: '#pStart', lossGoal: '#pLoss', stepsGoal: '#pStepsGoal', rowGoal: '#pRowGoal',
   mKcal: '#mKcal', mProtMin: '#mProtMin', mProtMax: '#mProtMax', mCarbMin: '#mCarbMin', mCarbMax: '#mCarbMax', mFatMin: '#mFatMin', mFatMax: '#mFatMax' };
 const STR = new Set(['sex', 'goal']);
@@ -1077,6 +1080,6 @@ async function start() {
   }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => { });
 }
-window.FitLog = { version: 7, build: '7.0', N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
+window.FitLog = { version: 8, build: '8.0', N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
 start();
 })();
