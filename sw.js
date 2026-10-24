@@ -1,7 +1,7 @@
 /* Fit Log service worker: app shell offline, big OCR files cached on first use.
    App files are always fetched from the network first (bypassing the HTTP cache), so an update can never mix old JS with new HTML. */
-const VERSION = 'fitlog-v4';
-const SHELL = ['./', 'index.html', 'css/app.css?v=4', 'js/calc.js?v=4', 'js/labelparse.js?v=4', 'js/importers.js?v=4', 'js/app.js?v=4',
+const VERSION = 'fitlog-v5';
+const SHELL = ['./', 'index.html', 'css/app.css?v=5', 'js/calc.js?v=5', 'js/labelparse.js?v=5', 'js/importers.js?v=5', 'js/app.js?v=5',
   'vendor/chart.umd.min.js', 'vendor/zxing.min.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-180.png'];
 const BIG = 'fitlog-vendor-v1';
 self.addEventListener('install', e => {

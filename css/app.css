@@ -182,3 +182,7 @@ details.help{margin:8px 0;font-size:.9rem}details.help summary{cursor:pointer;fo
 .savebar .btn.big{margin-top:0}
 .toast{top:calc(10px + env(safe-area-inset-top));bottom:auto}
 .tile.flash{animation:flash 1.4s ease}@keyframes flash{0%,40%{box-shadow:0 0 0 4px var(--brand2)}100%{box-shadow:none}}
+/* v5: tiles never move or resize – the − button's space is always reserved */
+.minus.off{visibility:hidden;pointer-events:none}
+.tile{height:118px;min-height:0}.tile .tname{-webkit-line-clamp:1;white-space:nowrap;display:block}
+.tsub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

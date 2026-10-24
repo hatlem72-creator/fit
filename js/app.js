@@ -543,7 +543,8 @@ function countFor(id, D = day()) { return D.entries.filter(e => e.productId === 
 function sortedFoods(q) {
   q = (q || '').trim().toLowerCase();
   return S.foods.filter(f => !q || (f.name + ' ' + (f.brand || '')).toLowerCase().includes(q))
-    .sort((a, b) => ((b.uses || 0) - (a.uses || 0)) || ((b.lastUsed || 0) - (a.lastUsed || 0)) || a.name.localeCompare(b.name));
+    // fixed order: the order the foods were added (never by use count, so tiles don't jump when tapped)
+    .map((f, i) => [f, i]).sort((x, y) => ((x[0].created || 0) - (y[0].created || 0)) || (x[1] - y[1])).map(x => x[0]);
 }
 let tilesAll = false;
 function renderFood() {
@@ -553,7 +554,7 @@ function renderFood() {
   $('#tiles').innerHTML = shown.map(f => {
     const n = countFor(f.id), g = defG(f), pt = valsFor(f, g);
     return `<div class="tile ${n ? 'on' : ''}" data-t="${f.id}" role="button" tabindex="0" aria-label="Add ${esc(f.name)}, ${gTxt(g)}, ${fmt(pt.kcal)} kcal">
-      <div class="ttop"><span class="tth">${thumbHtml(f.thumb)}${n ? `<b class="badge">×${nice(n)}</b>` : ''}</span>${n ? `<button type="button" class="minus" data-minus="${f.id}" aria-label="Remove one ${esc(f.name)}">−</button>` : ''}</div>
+      <div class="ttop"><span class="tth">${thumbHtml(f.thumb)}${n ? `<b class="badge">×${nice(n)}</b>` : ''}</span><button type="button" class="minus${n ? '' : ' off'}" data-minus="${f.id}" aria-label="Remove one ${esc(f.name)}"${n ? '' : ' tabindex="-1" aria-hidden="true" disabled'}>−</button></div>
       <div class="tname">${esc(f.name)}</div><div class="tsub">${gTxt(g)} · <b>${fmt(pt.kcal)}</b> kcal</div></div>`;
   }).join('') + (q && !shown.length ? '<p class="tiny muted">No match.</p>' : '')
     + `<button type="button" class="tile add" id="tileNew"><span class="plus">＋</span><span class="tname">${S.foods.length ? 'New food' : 'Add your first food'}</span></button>`;
@@ -1026,6 +1027,6 @@ async function start() {
   }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => { });
 }
-window.FitLog = { version: 4, build: '4.1', N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
+window.FitLog = { version: 5, build: '5.0', N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
 start();
 })();
