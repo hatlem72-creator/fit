@@ -186,3 +186,8 @@ details.help{margin:8px 0;font-size:.9rem}details.help summary{cursor:pointer;fo
 .minus.off{visibility:hidden;pointer-events:none}
 .tile{height:118px;min-height:0}.tile .tname{-webkit-line-clamp:1;white-space:nowrap;display:block}
 .tsub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* v6: weekly habits */
+.wk-head{margin:14px 0 0;padding-top:10px;border-top:1px solid var(--line)}.wk-head h3{margin:0}
+.wk-count{font-weight:800;min-width:3ch;text-align:right;color:var(--muted)}.wk-count.all{color:#16a34a}
+#weeklyList .habit .hval{min-width:4.5em;text-align:right}
+.wkweek{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:.85rem;margin-top:8px}.wkweek span{color:var(--muted)}.wkweek span.on{color:#16a34a;font-weight:600}

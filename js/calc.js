@@ -48,7 +48,8 @@
     return +p.targetWeight || 0;
   }
   // "My plan" preset (only applied when the user taps it / enables manual mode with empty fields)
-  const PLAN = { mKcal: 1870, mProtMin: 180, mProtMax: 190, mCarbMin: 100, mCarbMax: 130, mFatAuto: true, stepsGoal: 8000, rowGoal: 15, lossGoal: 10 };
+  const PLAN = { mKcal: 1870, mProtMin: 180, mProtMax: 190, mCarbMin: 100, mCarbMax: 130, mFatAuto: true, stepsGoal: 8000, rowGoal: 15, lossGoal: 10,
+    weekly: [{ id: 'triceps', name: 'Triceps', min: 60 }, { id: 'biceps', name: 'Biceps', min: 60 }, { id: 'shoulders', name: 'Shoulders', min: 60 }] };
   function autoFat(kcal, pMin, pMax, cMin, cMax) {
     const mid = (kcal - (pMin + pMax) / 2 * 4 - (cMin + cMax) / 2 * 4) / 9;
     return { min: Math.max(0, Math.round(mid - 5)), max: Math.max(0, Math.round(mid + 5)) };
