@@ -48,7 +48,7 @@ async function loadAll() {
   await migrate();
 }
 /* schema migration: v1 -> v2 only adds fields, never removes or rewrites existing data */
-const SCHEMA = 5;
+const SCHEMA = 6;
 async function migrate() {
   const p = S.profile;
   if ((p.schema || 1) >= SCHEMA) return;
@@ -69,6 +69,13 @@ async function migrate() {
   if (p.mFatAuto == null) p.mFatAuto = true;
   // v5: weekly habits (one session each per Mon–Sun week)
   if (!Array.isArray(p.weekly)) p.weekly = Calc.PLAN.weekly.map(x => ({ ...x }));
+  // v6: each weekly habit has a fixed kcal per session that is added to that day's burnt; logged sessions get the new values
+  if (was < 6) {
+    const def = Object.fromEntries(Calc.PLAN.weekly.map(x => [x.id, x.kcal]));
+    for (const hb of p.weekly) if (!(+hb.kcal > 0)) hb.kcal = def[hb.id] || 300;
+    const kc = Object.fromEntries(p.weekly.map(x => [x.id, x.kcal]));
+    for (const [d, D] of Object.entries(S.days)) { let ch = false; for (const w of D.workouts || []) if (w.habit && kc[w.habit] != null && w.kcal !== kc[w.habit]) { w.kcal = kc[w.habit]; w.kcalEst = true; ch = true; } if (ch) await DB.set('day:' + d, D); }
+  }
   if (p.goal === 'recomp' && !p.startWeight) p.startWeight = firstWeight() || p.weight;
   // v4: "My plan" is the default when manual targets were never set; every food gets a default amount (grams)
   if (was < 4 && !p.manual && p.mKcal == null) applyPlan(p);
@@ -146,10 +153,15 @@ function dayTotals(d) {
   return t;
 }
 function burnt(d) {
-  const a = day(d).activity || {}, tg = T();
-  if (+a.total) return { v: +a.total, src: 'watch' };
-  if (+a.active) return { v: tg.bmr + +a.active, src: 'BMR + active' };
-  return tg.tdee ? { v: tg.tdee, src: 'est.' } : { v: 0, src: '' };
+  const D = day(d), a = D.activity || {}, tg = T();
+  // weekly-habit sessions ticked on this day are added on top, in every mode (the user's choice)
+  const extra = (D.workouts || []).filter(w => w.habit && +w.kcal > 0).map(w => ({ name: w.type, kcal: +w.kcal }));
+  const plus = extra.reduce((s, x) => s + x.kcal, 0);
+  let base;
+  if (+a.total) base = { v: +a.total, src: 'watch' };
+  else if (+a.active) base = { v: tg.bmr + +a.active, src: 'BMR + active' };
+  else base = tg.tdee ? { v: tg.tdee, src: 'est.' } : { v: 0, src: '' };
+  return { v: base.v + plus, base: base.v, src: base.src, extra, plus };
 }
 function E() { return Calc.effective(S.profile); }
 function targetFor(d) {
@@ -184,7 +196,6 @@ function weeklyDone(h, d = curDay) {
   for (const x of weekOf(d)) { const w = ((S.days[x] && S.days[x].workouts) || []).find(w => w.habit === h.id); if (w) return { day: x, w }; }
   return null;
 }
-const strengthKcal = min => { const kg = latestWeight() || +S.profile.weight; return kg ? Math.round(5 * kg * min / 60) : 0; };   // MET 5 estimate, display only
 function renderWeekly() {
   const hs = weeklyHabits(), done = hs.filter(h => weeklyDone(h)).length;
   $('#wkCount').textContent = `${done}/${hs.length}`; $('#wkCount').classList.toggle('all', hs.length > 0 && done === hs.length);
@@ -200,9 +211,9 @@ async function toggleWeekly(id) {
     toast(`${h.name} cleared`, 2200, async () => { day(d.day).workouts.splice(i, 0, d.w); await saveDay(d.day); renderToday(); });
   } else {
     const D = day(); D.workouts = D.workouts || [];
-    const w = { type: h.name, minutes: h.min, kcal: strengthKcal(h.min), kcalEst: true, source: 'habit', habit: h.id };
+    const w = { type: h.name, minutes: h.min, kcal: +h.kcal || 0, kcalEst: true, source: 'habit', habit: h.id };
     D.workouts.push(w); await saveDay(); renderToday();
-    toast(`${h.name} ${h.min % 60 ? h.min + ' min' : h.min / 60 + ' h'} done ✓`, 2200, async () => { const W = day().workouts; const j = W.indexOf(w); if (j >= 0) W.splice(j, 1); await saveDay(); renderToday(); });
+    toast(`${h.name} done ✓ · +${fmt(+h.kcal || 0)} kcal burnt`, 2200, async () => { const W = day().workouts; const j = W.indexOf(w); if (j >= 0) W.splice(j, 1); await saveDay(); renderToday(); });
   }
 }
 
@@ -254,6 +265,8 @@ function renderToday() {
   $('#tTarget').textContent = target ? fmt(target) : '–';
   $('#tEaten').textContent = fmt(tot.kcal);
   $('#tBurnt').textContent = b.v ? fmt(b.v) : '–'; $('#burntSrc').textContent = b.src ? '(' + b.src + ')' : '';
+  const bx = b.extra.map(x => `${x.name} +${fmt(x.kcal)}`).join(' · ');
+  $('#burntExtra').textContent = bx || '\u00a0'; $('#burntExtra').title = bx;
   const bal = b.v ? tot.kcal - b.v : null;
   $('#tBalance').textContent = bal == null ? '–' : (bal > 0 ? '+' : '') + fmt(bal);
   $('#tBalance').style.color = bal == null ? '' : bal < 0 ? 'var(--ok)' : 'var(--accent)';
@@ -380,7 +393,7 @@ function renderWeek() {
   const ws = weekStart(weekOffset), days = Array.from({ length: 7 }, (_, i) => addDays(ws, i));
   $('#weekLabel').textContent = weekOffset === 0 ? 'This week' : weekOffset === -1 ? 'Last week' : parseYmd(ws).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ' – ' + parseYmd(days[6]).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
   const eaten = days.map(d => S.days[d] ? r0(dayTotals(d).kcal) : 0);
-  const burn = days.map(d => (S.days[d] && S.days[d].activity && (S.days[d].activity.total || S.days[d].activity.active)) ? r0(burnt(d).v) : 0);
+  const burn = days.map(d => (S.days[d] && ((S.days[d].activity && (S.days[d].activity.total || S.days[d].activity.active)) || burnt(d).plus)) ? r0(burnt(d).v) : 0);
   const logged = days.filter((d, i) => eaten[i] > 0);
   const t = today(), past = days.filter(d => d <= t);
   const avgE = logged.length ? eaten.filter(v => v > 0).reduce((a, b) => a + b, 0) / logged.length : 0;
@@ -445,7 +458,9 @@ function renderMe() {
   if (!$('#pStepsGoal').value) $('#pStepsGoal').value = 8000;
   if (!$('#pRowGoal').value) $('#pRowGoal').value = 15;
   renderCalc();
-  $('#weeklyMe').textContent = weeklyHabits().length ? weeklyHabits().map(h => `${h.name} ${h.min % 60 ? h.min + ' min' : h.min / 60 + ' h'}`).join(' · ') + ' — once each per week (Mon–Sun), ticked on Today.' : 'None. Tap “Use my plan” to add Triceps, Biceps and Shoulders (1 h each).';
+  $('#weeklyMe').innerHTML = weeklyHabits().length ? `<span class="tiny muted">Once each per week (Mon–Sun), ticked on Today. The kcal is added to that day's burnt.</span>`
+    + weeklyHabits().map(h => `<label class="field wkf"><span>${esc(h.name)} ${h.min % 60 ? h.min + ' min' : h.min / 60 + ' h'} · kcal burnt</span><input type="text" inputmode="numeric" data-whk="${esc(h.id)}" value="${+h.kcal || ''}" placeholder="300" aria-label="${esc(h.name)} kcal per session"></label>`).join('')
+    : '<span class="tiny muted">None. Tap “Use my plan” to add Triceps, Biceps and Shoulders (1 h each).</span>';
   $('#wtDate').value = today();
   const ws = [...S.weights].sort((a, b) => a.date < b.date ? 1 : -1);
   $('#wtList').innerHTML = ws.slice(0, 30).map(w => `<div class="item"><span>${parseYmd(w.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</span><span><b>${r1(w.kg)} kg</b> <button class="x" data-wtdel="${w.date}" aria-label="Delete">✕</button></span></div>`).join('');
@@ -456,6 +471,7 @@ function renderMe() {
 function readProfileForm() {
   const p = { ...S.profile };
   for (const [k, id] of Object.entries(PF)) { const v = $(id).value; p[k] = STR.has(k) ? v : (isNaN(N(v)) ? undefined : N(v)); }
+  if (Array.isArray(p.weekly)) p.weekly = p.weekly.map(hb => { const el = document.querySelector(`#weeklyMe [data-whk="${hb.id}"]`); const v = el ? N(el.value) : NaN; return { ...hb, kcal: v >= 0 ? Math.round(v) : hb.kcal }; });
   p.adaptive = $('#pAdaptive').checked; p.manual = $('#pManual').checked; p.mFatAuto = $('#mFatAuto').checked;
   p.schema = SCHEMA;
   return p;
@@ -512,7 +528,7 @@ $('#planBtn').onclick = async () => {
   const P = Calc.PLAN;
   $('#pManual').checked = true; $('#mFatAuto').checked = true;
   $('#mKcal').value = P.mKcal; $('#mProtMin').value = P.mProtMin; $('#mProtMax').value = P.mProtMax; $('#mCarbMin').value = P.mCarbMin; $('#mCarbMax').value = P.mCarbMax;
-  $('#pStepsGoal').value = P.stepsGoal; $('#pRowGoal').value = P.rowGoal; S.profile.weekly = P.weekly.map(x => ({ ...x }));
+  $('#pStepsGoal').value = P.stepsGoal; $('#pRowGoal').value = P.rowGoal; S.profile.weekly = P.weekly.map(x => ({ ...x })); $$('#weeklyMe [data-whk]').forEach(el => { const d = P.weekly.find(x => x.id === el.dataset.whk); if (d) el.value = d.kcal; });
   $('#pGoal').value = 'recomp'; if (!$('#pStart').value) $('#pStart').value = latestWeight() || $('#pWeight').value || ''; $('#pLoss').value = P.lossGoal;
   renderCalc(); await saveProfile('#tSaved'); $('#tSaved').textContent = "✓ My plan applied: 1,870 kcal, protein 180–190 g, carbs 100–130 g, recomp −10 kg, weekly Triceps / Biceps / Shoulders 1 h";
 };
@@ -1061,6 +1077,6 @@ async function start() {
   }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => { });
 }
-window.FitLog = { version: 6, build: '6.0', N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
+window.FitLog = { version: 7, build: '7.0', N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
 start();
 })();
