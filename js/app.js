@@ -48,7 +48,7 @@ async function loadAll() {
   await migrate();
 }
 /* schema migration: v1 -> v2 only adds fields, never removes or rewrites existing data */
-const SCHEMA = 9;
+const SCHEMA = 10;
 async function migrate() {
   const p = S.profile;
   if ((p.schema || 1) >= SCHEMA) return;
@@ -157,12 +157,12 @@ function dayTotals(d) {
 }
 function burnt(d) {
   const D = day(d), a = D.activity || {}, tg = T();
-  // weekly-habit sessions and a ticked steps goal are added on top, in every mode (same trade-off as weekly habits)
+  // weekly habits + steps (proportional to logged count) are added on top, in every mode
   const extra = (D.workouts || []).filter(w => w.habit && +w.kcal > 0).map(w => ({ name: w.type, kcal: +w.kcal }));
-  const hs = habitState(d);
-  if (hs.sDone) {
-    const sk = Calc.stepsKcal(S.profile, stepsGoal(), latestWeight() || S.profile.weight);
-    if (sk > 0) extra.push({ name: 'Steps', kcal: sk });
+  const sn = stepsForBurn(d);
+  if (sn > 0) {
+    const sk = Calc.stepsKcal(S.profile, sn, latestWeight() || S.profile.weight);
+    if (sk > 0) extra.push({ name: 'Steps', kcal: sk, steps: sn });
   }
   const plus = extra.reduce((s, x) => s + x.kcal, 0);
   let base;
@@ -181,7 +181,13 @@ function targetFor(d) {
 function workoutCount(d) { return (day(d).workouts || []).length; }
 /* habits */
 const stepsGoal = () => +S.profile.stepsGoal || 10000, rowGoal = () => +S.profile.rowGoal || 15;
-const stepsBurnKcal = () => Calc.stepsKcal(S.profile, stepsGoal(), latestWeight() || S.profile.weight);
+// logged steps always drive kcal; tick with no count → assume the goal (10,000); untick does not erase a logged count
+function stepsForBurn(d = curDay) {
+  const steps = +((S.days[d] || day(d)).activity || {}).steps || 0;
+  if (steps > 0) return steps;
+  return habitState(d).sDone ? stepsGoal() : 0;
+}
+const stepsBurnKcal = (d = curDay) => Calc.stepsKcal(S.profile, stepsForBurn(d), latestWeight() || S.profile.weight);
 const isRow = w => /row|roing|roe/i.test(w.type || '');
 function habitState(d) {
   const D = S.days[d] || {}, a = D.activity || {}, h = D.habits || {};
@@ -275,7 +281,7 @@ function renderToday() {
   $('#tTarget').textContent = target ? fmt(target) : '–';
   $('#tEaten').textContent = fmt(tot.kcal);
   $('#tBurnt').textContent = b.v ? fmt(b.v) : '–'; $('#burntSrc').textContent = b.src ? '(' + b.src + ')' : '';
-  const bx = b.extra.map(x => `${x.name} +${fmt(x.kcal)}`).join(' · ');
+  const bx = b.extra.map(x => x.steps ? `Steps ${fmt(x.steps)} · +${fmt(x.kcal)}` : `${x.name} +${fmt(x.kcal)}`).join(' · ');
   $('#burntExtra').textContent = bx || '\u00a0'; $('#burntExtra').title = bx;
   const bal = b.v ? tot.kcal - b.v : null;
   $('#tBalance').textContent = bal == null ? '–' : (bal > 0 ? '+' : '') + fmt(bal);
@@ -306,8 +312,9 @@ function renderHabits() {
   $('#hStepsGoal').textContent = fmt(stepsGoal()); $('#hRowGoal').textContent = rowGoal();
   $('#hStepsCb').checked = h.sDone; $('#hStepsCb').disabled = false;
   $('#hRowCb').checked = h.rDone; $('#hRowCb').disabled = false;
-  const sk = stepsBurnKcal();
-  $('#hStepsVal').textContent = (h.steps ? fmt(h.steps) + (sk ? ' · ' : '') : '') + (sk ? `≈${fmt(sk)} kcal` : '');
+  const previewN = h.steps || stepsGoal();
+  const skShow = Calc.stepsKcal(S.profile, previewN, latestWeight() || S.profile.weight);
+  $('#hStepsVal').textContent = (h.steps ? fmt(h.steps) + (skShow ? ' · ' : '') : '') + (skShow ? `≈${fmt(skShow)} kcal` : '');
   $('#hRowVal').textContent = h.rowMin ? `${h.rowMin} min` : '';
   $('#hSteps').classList.toggle('done', h.sDone); $('#hRow').classList.toggle('done', h.rDone);
   $('#qRow').textContent = `+ Rowing ${rowGoal()} min`;
@@ -320,8 +327,10 @@ async function toggleDaily(key, name) {
   D.habits = { ...(D.habits || {}) };
   if (now === auto) delete D.habits[key]; else D.habits[key] = now;   // matching the auto value = no override needed
   await saveDay(d); renderToday();
-  const sk = key === 'steps' ? stepsBurnKcal() : 0;
-  const msg = now ? (sk ? `${name} done ✓ · +${fmt(sk)} kcal burnt` : `${name} done ✓`) : `${name} unticked`;
+  const sk = key === 'steps' ? stepsBurnKcal(d) : 0;
+  const logged = key === 'steps' && +((day(d).activity || {}).steps || 0) > 0;
+  const msg = now ? (sk ? `${name} done ✓ · +${fmt(sk)} kcal burnt` : `${name} done ✓`)
+    : (logged ? `${name} unticked · walk still counted` : `${name} unticked`);
   toast(msg, 2200, async () => { const X = day(d); X.habits = { ...(X.habits || {}) }; if (was === undefined) delete X.habits[key]; else X.habits[key] = was; await saveDay(d); renderToday(); });
 }
 $('#hStepsCb').onchange = () => toggleDaily('steps', 'Steps');
@@ -368,11 +377,13 @@ $('#wAdd').onclick = () => {
   $('#wMin').value = ''; $('#wKcal').value = ''; renderWorkouts();
 };
 $('#aSave').onclick = async () => {
+  // steps kcal is proportional to the saved count — Today burnt updates as soon as we leave / re-render
   if ($('#wMin').value) $('#wAdd').onclick();
   const num = id => { const v = Nv(id); return isNaN(v) ? undefined : v; };
   day().activity = { active: num('#aActive'), total: num('#aTotal'), steps: num('#aSteps') };
   day().workouts = draftWorkouts;
-  await saveDay(); $('#aSaved').textContent = '✓ Saved for ' + dayLabel(curDay).toLowerCase(); renderActivity(); $('#aSaved').textContent = '✓ Saved for ' + dayLabel(curDay).toLowerCase();
+  await saveDay(); render(); renderActivity();
+  $('#aSaved').textContent = '✓ Saved for ' + dayLabel(curDay).toLowerCase();
 };
 $('#importAct').onchange = async e => {
   const files = [...e.target.files]; let nd = 0, nw = 0, kinds = [];
@@ -1091,6 +1102,6 @@ async function start() {
   }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => { });
 }
-window.FitLog = { version: 10, build: '10.0', N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
+window.FitLog = { version: 11, build: '11.0', N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
 start();
 })();

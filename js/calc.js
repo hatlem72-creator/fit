@@ -77,12 +77,17 @@
     return out;
   }
   // net walking cost ≈ 0.5 kcal/kg/km; stride ≈ 0.415 × height (else 0.78 m)
-  function stepsKcal(p, steps, kg) {
-    const w = +kg || +p.weight || 0, n = +steps || 0;
-    if (!(w > 0) || !(n > 0)) return 0;
-    const h = +p.height || 0, stride = h > 0 ? 0.415 * (h / 100) : 0.78;
-    return Math.round(0.5 * w * n * stride / 1000);
+  // kcal/step = 0.5 × kg × stride_m / 1000  (e.g. 94 kg / 183 cm ≈ 0.0357)
+  function stepsStride(p) { const h = +p.height || 0; return h > 0 ? 0.415 * (h / 100) : 0.78; }
+  function kcalPerStep(p, kg) {
+    const w = +kg || +p.weight || 0;
+    return w > 0 ? 0.5 * w * stepsStride(p) / 1000 : 0;
   }
-  const api = { activityFactor, bmr, targets, portion, effective, autoFat, goalWeight, stepsKcal, PLAN, KCAL_PER_KG };
+  function stepsKcal(p, steps, kg) {
+    const n = +steps || 0;
+    if (!(n > 0)) return 0;
+    return Math.round(kcalPerStep(p, kg) * n);
+  }
+  const api = { activityFactor, bmr, targets, portion, effective, autoFat, goalWeight, stepsStride, kcalPerStep, stepsKcal, PLAN, KCAL_PER_KG };
   if (typeof module !== 'undefined') module.exports = api; else root.Calc = api;
 })(this);
