@@ -50,7 +50,7 @@
     return +p.targetWeight || 0;
   }
   // "My plan" preset (only applied when the user taps it / enables manual mode with empty fields)
-  const PLAN = { mKcal: 1870, mProtMin: 180, mProtMax: 190, mCarbMin: 100, mCarbMax: 130, mFatAuto: true, burnEst: 2450, stepsGoal: 8000, rowGoal: 15, lossGoal: 10,
+  const PLAN = { mKcal: 1870, mProtMin: 180, mProtMax: 190, mCarbMin: 100, mCarbMax: 130, mFatAuto: true, burnEst: 2450, stepsGoal: 10000, rowGoal: 15, lossGoal: 10,
     weekly: [{ id: 'triceps', name: 'Triceps', min: 60, kcal: 275 }, { id: 'biceps', name: 'Biceps', min: 60, kcal: 275 }, { id: 'shoulders', name: 'Shoulders', min: 60, kcal: 325 }] };
   function autoFat(kcal, pMin, pMax, cMin, cMax) {
     const mid = (kcal - (pMin + pMax) / 2 * 4 - (cMin + cMax) / 2 * 4) / 9;
@@ -76,6 +76,13 @@
     }
     return out;
   }
-  const api = { activityFactor, bmr, targets, portion, effective, autoFat, goalWeight, PLAN, KCAL_PER_KG };
+  // net walking cost ≈ 0.5 kcal/kg/km; stride ≈ 0.415 × height (else 0.78 m)
+  function stepsKcal(p, steps, kg) {
+    const w = +kg || +p.weight || 0, n = +steps || 0;
+    if (!(w > 0) || !(n > 0)) return 0;
+    const h = +p.height || 0, stride = h > 0 ? 0.415 * (h / 100) : 0.78;
+    return Math.round(0.5 * w * n * stride / 1000);
+  }
+  const api = { activityFactor, bmr, targets, portion, effective, autoFat, goalWeight, stepsKcal, PLAN, KCAL_PER_KG };
   if (typeof module !== 'undefined') module.exports = api; else root.Calc = api;
 })(this);

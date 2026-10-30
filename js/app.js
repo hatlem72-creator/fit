@@ -38,7 +38,7 @@ let curDay = today(), curView = 'today', weekOffset = 0;
 
 async function loadAll() {
   const all = await DB.all();
-  S.profile = all.profile || { sex: 'male', goal: 'recomp', rate: 0.5, sessions: 3, lossGoal: 10, stepsGoal: 8000, rowGoal: 15, schema: 2 };
+  S.profile = all.profile || { sex: 'male', goal: 'recomp', rate: 0.5, sessions: 3, lossGoal: 10, stepsGoal: 10000, rowGoal: 15, schema: 2 };
   S.settings = all.settings || {};
   S.weights = all.weights || [];
   S.foods = all.foods || [];
@@ -48,7 +48,7 @@ async function loadAll() {
   await migrate();
 }
 /* schema migration: v1 -> v2 only adds fields, never removes or rewrites existing data */
-const SCHEMA = 8;
+const SCHEMA = 9;
 async function migrate() {
   const p = S.profile;
   if ((p.schema || 1) >= SCHEMA) return;
@@ -63,7 +63,8 @@ async function migrate() {
   }
   if (fch) await DB.set('foods', S.foods);
   if (!Array.isArray(S.combos)) { S.combos = []; await DB.set('meals', S.combos); }
-  if (p.stepsGoal == null) p.stepsGoal = 8000;
+  if (p.stepsGoal == null) p.stepsGoal = 10000;
+  if (was < 9 && +p.stepsGoal === 8000) p.stepsGoal = Calc.PLAN.stepsGoal;   // v9: steps goal 10,000; kcal added when ticked
   if (p.rowGoal == null) p.rowGoal = 15;
   if (p.manual == null) p.manual = false;
   if (p.mFatAuto == null) p.mFatAuto = true;
@@ -156,8 +157,13 @@ function dayTotals(d) {
 }
 function burnt(d) {
   const D = day(d), a = D.activity || {}, tg = T();
-  // weekly-habit sessions ticked on this day are added on top, in every mode (the user's choice)
+  // weekly-habit sessions and a ticked steps goal are added on top, in every mode (same trade-off as weekly habits)
   const extra = (D.workouts || []).filter(w => w.habit && +w.kcal > 0).map(w => ({ name: w.type, kcal: +w.kcal }));
+  const hs = habitState(d);
+  if (hs.sDone) {
+    const sk = Calc.stepsKcal(S.profile, stepsGoal(), latestWeight() || S.profile.weight);
+    if (sk > 0) extra.push({ name: 'Steps', kcal: sk });
+  }
   const plus = extra.reduce((s, x) => s + x.kcal, 0);
   let base;
   if (+a.total) base = { v: +a.total, src: 'watch' };
@@ -174,7 +180,8 @@ function targetFor(d) {
 }
 function workoutCount(d) { return (day(d).workouts || []).length; }
 /* habits */
-const stepsGoal = () => +S.profile.stepsGoal || 8000, rowGoal = () => +S.profile.rowGoal || 15;
+const stepsGoal = () => +S.profile.stepsGoal || 10000, rowGoal = () => +S.profile.rowGoal || 15;
+const stepsBurnKcal = () => Calc.stepsKcal(S.profile, stepsGoal(), latestWeight() || S.profile.weight);
 const isRow = w => /row|roing|roe/i.test(w.type || '');
 function habitState(d) {
   const D = S.days[d] || {}, a = D.activity || {}, h = D.habits || {};
@@ -299,7 +306,8 @@ function renderHabits() {
   $('#hStepsGoal').textContent = fmt(stepsGoal()); $('#hRowGoal').textContent = rowGoal();
   $('#hStepsCb').checked = h.sDone; $('#hStepsCb').disabled = false;
   $('#hRowCb').checked = h.rDone; $('#hRowCb').disabled = false;
-  $('#hStepsVal').textContent = h.steps ? fmt(h.steps) : '';
+  const sk = stepsBurnKcal();
+  $('#hStepsVal').textContent = (h.steps ? fmt(h.steps) + (sk ? ' · ' : '') : '') + (sk ? `≈${fmt(sk)} kcal` : '');
   $('#hRowVal').textContent = h.rowMin ? `${h.rowMin} min` : '';
   $('#hSteps').classList.toggle('done', h.sDone); $('#hRow').classList.toggle('done', h.rDone);
   $('#qRow').textContent = `+ Rowing ${rowGoal()} min`;
@@ -312,7 +320,9 @@ async function toggleDaily(key, name) {
   D.habits = { ...(D.habits || {}) };
   if (now === auto) delete D.habits[key]; else D.habits[key] = now;   // matching the auto value = no override needed
   await saveDay(d); renderToday();
-  toast(now ? `${name} done ✓` : `${name} unticked`, 2200, async () => { const X = day(d); X.habits = { ...(X.habits || {}) }; if (was === undefined) delete X.habits[key]; else X.habits[key] = was; await saveDay(d); renderToday(); });
+  const sk = key === 'steps' ? stepsBurnKcal() : 0;
+  const msg = now ? (sk ? `${name} done ✓ · +${fmt(sk)} kcal burnt` : `${name} done ✓`) : `${name} unticked`;
+  toast(msg, 2200, async () => { const X = day(d); X.habits = { ...(X.habits || {}) }; if (was === undefined) delete X.habits[key]; else X.habits[key] = was; await saveDay(d); renderToday(); });
 }
 $('#hStepsCb').onchange = () => toggleDaily('steps', 'Steps');
 $('#hRowCb').onchange = () => toggleDaily('row', 'Rowing');
@@ -1081,6 +1091,6 @@ async function start() {
   }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => { });
 }
-window.FitLog = { version: 9, build: '9.0', N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
+window.FitLog = { version: 10, build: '10.0', N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
 start();
 })();
