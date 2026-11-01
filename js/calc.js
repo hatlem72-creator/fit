@@ -88,6 +88,12 @@
     if (!(n > 0)) return 0;
     return Math.round(kcalPerStep(p, kg) * n);
   }
-  const api = { activityFactor, bmr, targets, portion, effective, autoFat, goalWeight, stepsStride, kcalPerStep, stepsKcal, PLAN, KCAL_PER_KG };
+  // MET 7.0 moderate rowing machine (Compendium) × kg × hours; fallback weight 94
+  function rowKcal(p, minutes, kg) {
+    const w = +kg || +p.weight || 94, m = +minutes || 0;
+    if (!(m > 0) || !(w > 0)) return 0;
+    return Math.round(7.0 * w * m / 60);
+  }
+  const api = { activityFactor, bmr, targets, portion, effective, autoFat, goalWeight, stepsStride, kcalPerStep, stepsKcal, rowKcal, PLAN, KCAL_PER_KG };
   if (typeof module !== 'undefined') module.exports = api; else root.Calc = api;
 })(this);

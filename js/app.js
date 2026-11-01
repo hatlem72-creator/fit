@@ -48,7 +48,7 @@ async function loadAll() {
   await migrate();
 }
 /* schema migration: v1 -> v2 only adds fields, never removes or rewrites existing data */
-const SCHEMA = 10;
+const SCHEMA = 11;
 async function migrate() {
   const p = S.profile;
   if ((p.schema || 1) >= SCHEMA) return;
@@ -155,14 +155,20 @@ function dayTotals(d) {
   for (const e of day(d).entries) for (const k in t) t[k] += +e[k] || 0;
   return t;
 }
+function bodyKg() { return latestWeight() || S.profile.weight || 94; }
 function burnt(d) {
   const D = day(d), a = D.activity || {}, tg = T();
-  // weekly habits + steps (proportional to logged count) are added on top, in every mode
+  // weekly habits + steps + rowing are added on top, in every burnt mode
   const extra = (D.workouts || []).filter(w => w.habit && +w.kcal > 0).map(w => ({ name: w.type, kcal: +w.kcal }));
   const sn = stepsForBurn(d);
   if (sn > 0) {
-    const sk = Calc.stepsKcal(S.profile, sn, latestWeight() || S.profile.weight);
+    const sk = Calc.stepsKcal(S.profile, sn, bodyKg());
     if (sk > 0) extra.push({ name: 'Steps', kcal: sk, steps: sn });
+  }
+  const rm = rowForBurn(d);
+  if (rm > 0) {
+    const rk = Calc.rowKcal(S.profile, rm, bodyKg());
+    if (rk > 0) extra.push({ name: 'Rowing', kcal: rk, minutes: rm });
   }
   const plus = extra.reduce((s, x) => s + x.kcal, 0);
   let base;
@@ -187,8 +193,15 @@ function stepsForBurn(d = curDay) {
   if (steps > 0) return steps;
   return habitState(d).sDone ? stepsGoal() : 0;
 }
-const stepsBurnKcal = (d = curDay) => Calc.stepsKcal(S.profile, stepsForBurn(d), latestWeight() || S.profile.weight);
+const stepsBurnKcal = (d = curDay) => Calc.stepsKcal(S.profile, stepsForBurn(d), bodyKg());
 const isRow = w => /row|roing|roe/i.test(w.type || '');
+// logged rowing minutes always drive kcal; tick with no workout → assume the goal (15 min); untick does not erase a logged workout
+function rowForBurn(d = curDay) {
+  const rowMin = ((S.days[d] || day(d)).workouts || []).filter(isRow).reduce((s, w) => s + (+w.minutes || 0), 0);
+  if (rowMin > 0) return rowMin;
+  return habitState(d).rDone ? rowGoal() : 0;
+}
+const rowBurnKcal = (d = curDay) => Calc.rowKcal(S.profile, rowForBurn(d), bodyKg());
 function habitState(d) {
   const D = S.days[d] || {}, a = D.activity || {}, h = D.habits || {};
   const steps = +a.steps || 0, rowMin = (D.workouts || []).filter(isRow).reduce((s, w) => s + (+w.minutes || 0), 0);
@@ -281,7 +294,11 @@ function renderToday() {
   $('#tTarget').textContent = target ? fmt(target) : '–';
   $('#tEaten').textContent = fmt(tot.kcal);
   $('#tBurnt').textContent = b.v ? fmt(b.v) : '–'; $('#burntSrc').textContent = b.src ? '(' + b.src + ')' : '';
-  const bx = b.extra.map(x => x.steps ? `Steps ${fmt(x.steps)} · +${fmt(x.kcal)}` : `${x.name} +${fmt(x.kcal)}`).join(' · ');
+  const bx = b.extra.map(x => {
+    if (x.steps) return `Steps ${fmt(x.steps)} · +${fmt(x.kcal)}`;
+    if (x.minutes) return `Rowing ${x.minutes} min · +${fmt(x.kcal)}`;
+    return `${x.name} +${fmt(x.kcal)}`;
+  }).join(' · ');
   $('#burntExtra').textContent = bx || '\u00a0'; $('#burntExtra').title = bx;
   const bal = b.v ? tot.kcal - b.v : null;
   $('#tBalance').textContent = bal == null ? '–' : (bal > 0 ? '+' : '') + fmt(bal);
@@ -313,9 +330,11 @@ function renderHabits() {
   $('#hStepsCb').checked = h.sDone; $('#hStepsCb').disabled = false;
   $('#hRowCb').checked = h.rDone; $('#hRowCb').disabled = false;
   const previewN = h.steps || stepsGoal();
-  const skShow = Calc.stepsKcal(S.profile, previewN, latestWeight() || S.profile.weight);
+  const skShow = Calc.stepsKcal(S.profile, previewN, bodyKg());
   $('#hStepsVal').textContent = (h.steps ? fmt(h.steps) + (skShow ? ' · ' : '') : '') + (skShow ? `≈${fmt(skShow)} kcal` : '');
-  $('#hRowVal').textContent = h.rowMin ? `${h.rowMin} min` : '';
+  const previewM = h.rowMin || rowGoal();
+  const rkShow = Calc.rowKcal(S.profile, previewM, bodyKg());
+  $('#hRowVal').textContent = (h.rowMin ? `${h.rowMin} min` + (rkShow ? ' · ' : '') : '') + (rkShow ? `≈${fmt(rkShow)} kcal` : '');
   $('#hSteps').classList.toggle('done', h.sDone); $('#hRow').classList.toggle('done', h.rDone);
   $('#qRow').textContent = `+ Rowing ${rowGoal()} min`;
   const n = streak(); $('#streak').textContent = n ? `🔥 ${n}-day streak` : '';
@@ -327,15 +346,17 @@ async function toggleDaily(key, name) {
   D.habits = { ...(D.habits || {}) };
   if (now === auto) delete D.habits[key]; else D.habits[key] = now;   // matching the auto value = no override needed
   await saveDay(d); renderToday();
-  const sk = key === 'steps' ? stepsBurnKcal(d) : 0;
-  const logged = key === 'steps' && +((day(d).activity || {}).steps || 0) > 0;
+  const sk = key === 'steps' ? stepsBurnKcal(d) : key === 'row' ? rowBurnKcal(d) : 0;
+  const logged = key === 'steps' ? +((day(d).activity || {}).steps || 0) > 0
+    : key === 'row' ? ((day(d).workouts || []).filter(isRow).reduce((s, w) => s + (+w.minutes || 0), 0) > 0) : false;
+  const kept = key === 'steps' ? 'walk still counted' : key === 'row' ? 'rowing still counted' : '';
   const msg = now ? (sk ? `${name} done ✓ · +${fmt(sk)} kcal burnt` : `${name} done ✓`)
-    : (logged ? `${name} unticked · walk still counted` : `${name} unticked`);
+    : (logged ? `${name} unticked · ${kept}` : `${name} unticked`);
   toast(msg, 2200, async () => { const X = day(d); X.habits = { ...(X.habits || {}) }; if (was === undefined) delete X.habits[key]; else X.habits[key] = was; await saveDay(d); renderToday(); });
 }
 $('#hStepsCb').onchange = () => toggleDaily('steps', 'Steps');
 $('#hRowCb').onchange = () => toggleDaily('row', 'Rowing');
-$('#qRow').onclick = async () => { const D = day(); D.workouts = D.workouts || []; D.workouts.push({ type: 'Rowing', minutes: rowGoal(), kcal: 0, source: 'quick' }); await saveDay(); toast(`Rowing ${rowGoal()} min logged`); renderToday(); };
+$('#qRow').onclick = async () => { const D = day(); D.workouts = D.workouts || []; const mins = rowGoal(); D.workouts.push({ type: 'Rowing', minutes: mins, kcal: Calc.rowKcal(S.profile, mins, bodyKg()), source: 'quick' }); await saveDay(); renderToday(); toast(`Rowing ${mins} min logged · +${fmt(rowBurnKcal())} kcal burnt`); };
 $('#qSteps').onclick = () => { setView('activity'); setTimeout(() => $('#aSteps').focus(), 50); };
 function renderGoalProgress() {
   const p = S.profile, gw = Calc.goalWeight(p), card = $('#goalCard');
@@ -1102,6 +1123,6 @@ async function start() {
   }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => { });
 }
-window.FitLog = { version: 11, build: '11.0', N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
+window.FitLog = { version: 12, build: '12.0', N, S, DB, lookupBarcode, handleLabel, LabelParse, render };
 start();
 })();
